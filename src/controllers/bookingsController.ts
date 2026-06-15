@@ -1,5 +1,5 @@
 import type { Request, Response } from "express"
-import { Prisma } from "@prisma/client"
+import { Prisma, type PrismaClient } from "@prisma/client"
 import { bookingSchema} from "../models/schemas.js"
 import { toNumberValue } from "../lib/toNumberValue.js"
 import type { AuthUser } from "../lib/auth.js"
@@ -54,7 +54,54 @@ function requireAuthRequest(req: AuthRequest, res: Response): AuthUser | null {
 const BOOKING_PENDING_TTL_MINUTES = Number(process.env.BOOKING_PENDING_TTL_MINUTES ?? 10);
 function getPendingBookingExpiryDate() {
   return new Date(Date.now() - BOOKING_PENDING_TTL_MINUTES * 60 * 1000);
-} // gets the pending booking expiry date
+}
+
+const bookingDetailInclude = {
+  schedule: {
+    include: {
+      route: { include: { company: { select: { name: true } } } },
+      bus: { select: { model: true, plateNumber: true } },
+    },
+  },
+  seatSelections: { select: { seatNumber: true } },
+  payment: true,
+} as Prisma.BookingInclude;
+
+async function reconcileBookingIfPaid(
+  client: PrismaClient,
+  bookingId: string
+) {
+  const booking = await client.booking.findUnique({
+    where: { id: bookingId },
+    include: {
+      payment: true,
+      schedule: { select: { id: true } },
+    },
+  });
+  if (
+    !booking ||
+    booking.status !== "PENDING" ||
+    booking.payment?.status !== "SUCCESS"
+  ) {
+    return null;
+  }
+
+  await client.$transaction(async (tx) => {
+    await tx.booking.update({
+      where: { id: booking.id },
+      data: { status: "CONFIRMED" },
+    });
+    await tx.schedule.update({
+      where: { id: booking.scheduleId },
+      data: { availableSeats: { decrement: booking.seatsBooked } },
+    });
+  });
+
+  return client.booking.findUnique({
+    where: { id: bookingId },
+    include: bookingDetailInclude,
+  });
+}
 
 export async function getAllBookings(req:Request,res:Response){
     const user = requireAdminAccess(req, res)
@@ -149,6 +196,11 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
       bookingCompanyId === req.user.companyId;
     if (!isOwner && !isPlatformAdmin(req.user) && !isCompanyBookingAdmin) {
       return sendError(res, 403, "FORBIDDEN", "Accès non autorisé");
+    }
+
+    const reconciled = await reconcileBookingIfPaid(client, id);
+    if (reconciled) {
+      booking = reconciled;
     }
   
     return sendSuccess(res, toNumberValue(booking));
