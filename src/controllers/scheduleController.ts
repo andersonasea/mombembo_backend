@@ -1,9 +1,15 @@
 import { PrismaClient } from "@prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import type { Request, Response } from "express"
-import jwt from "jsonwebtoken"
 import { Prisma } from "@prisma/client"
 import { scheduleSchema, updateScheduleSchema } from "../models/schemas.js"
+import { toNumberValue } from "../lib/toNumberValue.js"
+import {
+  assertCompanyOwnership,
+  parseAuthUser,
+  requireAdminAccess,
+  resolveListCompanyId,
+} from "../lib/auth.js"
 
 let prisma: PrismaClient | null = null;
 function getPrismaClient(): PrismaClient | null {
@@ -44,47 +50,19 @@ function sendError(
         },
     });
 }
-function toNumberValue<T>(value: T): T {
-    if (Array.isArray(value)) return value.map((item) => toNumberValue(item)) as T;
-    if (value && typeof value === "object") {
-        const obj = value as Record<string, unknown>;
-        const out: Record<string, unknown> = {};
-        Object.entries(obj).forEach(([key, item]) => {
-            if (item && typeof item === "object" && "toNumber" in (item as object)) {
-                out[key] = Number(item);
-            } else {
-                out[key] = toNumberValue(item);
-            }
-        });
-        return out as T;
-    }
-    return value;
-}
 function isMissingTableError(error: unknown) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021";
 }
 
-type AuthUser = { id: string; role: "ADMIN" | "CLIENT" };
-
-function requireAdmin(req: Request, res: Response) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        sendError(res, 401, "UNAUTHORIZED", "Token manquant");
-        return null;
-    }
-    const token = authHeader.slice(7);
-    const jwtSecret = process.env.JWT_SECRET ?? "change-me";
-    try {
-        const payload = jwt.verify(token, jwtSecret) as AuthUser;
-        if (payload.role !== "ADMIN") {
-            sendError(res, 403, "FORBIDDEN", "Accès administrateur requis");
-            return null;
-        }
-        return payload;
-    } catch {
-        sendError(res, 401, "UNAUTHORIZED", "Token invalide");
-        return null;
-    }
+async function getScheduleCompanyId(
+  client: PrismaClient,
+  scheduleId: string
+): Promise<string | null> {
+  const schedule = await client.schedule.findUnique({
+    where: { id: scheduleId },
+    select: { route: { select: { companyId: true } } },
+  });
+  return schedule?.route.companyId ?? null;
 }
 
 export async function getAllSchedules(req: Request, res: Response) {
@@ -97,18 +75,25 @@ export async function getAllSchedules(req: Request, res: Response) {
             },
         });
     }
+    const user = parseAuthUser(req);
+    const companyId = resolveListCompanyId(
+        user,
+        req.query.companyId as string | undefined
+    );
     const routeId = req.query.routeId as string | undefined;
     const schedules = await client.schedule.findMany({
-        where: routeId
-            ? {
-                routeId,
-                status: "ACTIVE",
-                departureTime: { gte: new Date() },
-                availableSeats: { gt: 0 },
-            }
-            : undefined,
+        where: {
+            ...(routeId
+                ? {
+                    routeId,
+                    status: "ACTIVE",
+                    departureTime: { gte: new Date() },
+                }
+                : {}),
+            ...(companyId ? { route: { companyId } } : {}),
+        },
         include: {
-            route: { include: { company: { select: { name: true } } } },
+            route: { include: { company: { select: { id: true, name: true } } } },
             bus: { select: { id: true, plateNumber: true, model: true, totalSeats: true } },
         },
         orderBy: { departureTime: "asc" },
@@ -135,7 +120,7 @@ export async function getAllSchedulesbyId(req: Request, res: Response) {
                 route: { include: { company: { select: { id: true, name: true } } } },
                 bus: { select: { plateNumber: true, model: true, totalSeats: true } },
                 seatSelections: {
-                    where: { booking: { status: { not: "CANCELLED" } } },
+                    where: { booking: { status: "CONFIRMED" } },
                     select: { seatNumber: true },
                 },
             } as Prisma.ScheduleInclude,
@@ -155,6 +140,8 @@ export async function getAllSchedulesbyId(req: Request, res: Response) {
 }
 
 export async function createSchedule(req: Request, res: Response) {
+    const user = requireAdminAccess(req, res);
+    if (!user) return;
 
     const client = getPrismaClient();
     if (!client) {
@@ -170,8 +157,13 @@ export async function createSchedule(req: Request, res: Response) {
         return sendError(res, 400, "VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Payload invalide");
     }
 
+    const route = await client.route.findUnique({ where: { id: parsed.data.routeId } });
+    if (!route) return sendError(res, 404, "ROUTE_NOT_FOUND", "Trajet introuvable");
+    if (!assertCompanyOwnership(user, route.companyId, res)) return;
+
     const bus = await client.bus.findUnique({ where: { id: parsed.data.busId } });
     if (!bus) return sendError(res, 404, "BUS_NOT_FOUND", "Bus introuvable");
+    if (!assertCompanyOwnership(user, bus.companyId, res)) return;
 
     const schedule = await client.schedule.create({
         data: {
@@ -186,6 +178,8 @@ export async function createSchedule(req: Request, res: Response) {
 }
 
 export async function updateSchedul(req: Request, res: Response) {
+    const user = requireAdminAccess(req, res);
+    if (!user) return;
 
     const client = getPrismaClient();
     if (!client) {
@@ -202,8 +196,23 @@ export async function updateSchedul(req: Request, res: Response) {
         return sendError(res, 400, "VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Payload invalide");
     }
 
-    const existing = await client.schedule.findUnique({ where: { id } });
+    const existing = await client.schedule.findUnique({
+        where: { id },
+        include: { route: { select: { companyId: true } } },
+    });
     if (!existing) return sendError(res, 404, "SCHEDULE_NOT_FOUND", "Horaire introuvable");
+    if (!assertCompanyOwnership(user, existing.route.companyId, res)) return;
+
+    if (parsed.data.routeId) {
+        const route = await client.route.findUnique({ where: { id: parsed.data.routeId } });
+        if (!route) return sendError(res, 404, "ROUTE_NOT_FOUND", "Trajet introuvable");
+        if (!assertCompanyOwnership(user, route.companyId, res)) return;
+    }
+    if (parsed.data.busId) {
+        const bus = await client.bus.findUnique({ where: { id: parsed.data.busId } });
+        if (!bus) return sendError(res, 404, "BUS_NOT_FOUND", "Bus introuvable");
+        if (!assertCompanyOwnership(user, bus.companyId, res)) return;
+    }
 
     const data = {
         ...(parsed.data.routeId ? { routeId: parsed.data.routeId } : {}),
@@ -223,6 +232,9 @@ export async function updateSchedul(req: Request, res: Response) {
 }
 
 export async function deleteSchedule(req:Request,res:Response){
+    const user = requireAdminAccess(req, res);
+    if (!user) return;
+
     const client = getPrismaClient();
     if (!client) {
         return res.status(500).json({
@@ -233,8 +245,9 @@ export async function deleteSchedule(req:Request,res:Response){
         });
     }
     const id = String(req.params.id);
-  const existing = await client.schedule.findUnique({ where: { id } });
-  if (!existing) return sendError(res, 404, "SCHEDULE_NOT_FOUND", "Horaire introuvable");
+    const companyId = await getScheduleCompanyId(client, id);
+    if (!companyId) return sendError(res, 404, "SCHEDULE_NOT_FOUND", "Horaire introuvable");
+    if (!assertCompanyOwnership(user, companyId, res)) return;
 
   await client.schedule.delete({ where: { id } });
   return sendSuccess(res, { id, deleted: true });

@@ -1,0 +1,31 @@
+# Blueprint Render — API Mobembo
+# Dashboard Render → New → Blueprint → connecter mombembo_backend
+
+services:
+  - type: web
+    name: mobembo-api
+    runtime: node
+    buildCommand: npm install && npm run build && npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PUBLIC_API_BASE_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: FLEXPAY_BASE_URL
+        sync: false
+      - key: FLEXPAY_MERCHANT_ID
+        sync: false
+      - key: FLEXPAY_MERCHANT_SECRET
+        sync: false
+      - key: FLEXPAY_CALLBACK_URL
+        sync: false
+      - key: FLEXPAY_WEBHOOK_SECRET
+        sync: false

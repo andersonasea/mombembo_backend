@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+  
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  CLIENT
+  ADMIN
+  COMPANY_ADMIN
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  MPESA
+  AIRTEL_MONEY
+  ORANGE_MONEY
+  AFRI_MONEY
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ScheduleStatus {
+  ACTIVE
+  CANCELLED
+  COMPLETED
+}
+
+model User {
+  id            String            @id @default(cuid())
+  name          String
+  email         String            @unique
+  phone         String?
+  password      String
+  role          Role              @default(CLIENT)
+  companyId     String?
+  company       TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  bookings      Booking[]
+
+  @@map("users")
+}
+
+model TransportCompany {
+  id            String    @id @default(cuid())
+  name          String
+  logo          String?
+  phone         String
+  email         String    @unique
+  address       String?
+  description   String?
+  isActive      Boolean   @default(true)
+  subscribedAt  DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  buses         Bus[]
+  routes        Route[]
+  admins        User[]
+
+  @@map("transport_companies")
+}
+
+model Bus {
+  id            String           @id @default(cuid())
+  plateNumber   String           @unique
+  model         String?
+  totalSeats    Int
+  companyId     String
+  company       TransportCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime         @default(now())
+  schedules     Schedule[]
+
+  @@map("buses")
+}
+
+model Route {
+  id              String           @id @default(cuid())
+  departure       String
+  destination     String
+  price           Decimal          @db.Decimal(10, 2)
+  durationMinutes Int?
+  companyId       String
+  company         TransportCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt       DateTime         @default(now())
+  schedules       Schedule[]
+
+  @@unique([departure, destination, companyId])
+  @@map("routes")
+}
+
+model Schedule {
+  id             String         @id @default(cuid())
+  routeId        String
+  route          Route          @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  busId          String
+  bus            Bus            @relation(fields: [busId], references: [id], onDelete: Cascade)
+  departureTime  DateTime
+  arrivalTime    DateTime?
+  availableSeats Int
+  status         ScheduleStatus @default(ACTIVE)
+  createdAt      DateTime       @default(now())
+  bookings       Booking[]
+  seatSelections SeatSelection[]
+
+  @@map("schedules")
+}
+
+model Booking {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduleId  String
+  schedule    Schedule      @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  seatsBooked Int
+  totalPrice  Decimal       @db.Decimal(10, 2)
+  status      BookingStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  payment     Payment?
+  seatSelections SeatSelection[]
+
+  @@map("bookings")
+}
+
+model SeatSelection {
+  id         String   @id @default(cuid())
+  bookingId  String
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  scheduleId String
+  schedule   Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  seatNumber Int
+  createdAt  DateTime @default(now())
+
+  @@unique([scheduleId, seatNumber])
+  @@index([bookingId])
+  @@map("seat_selections")
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  amount          Decimal       @db.Decimal(10, 2)
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  transactionRef  String?
+  phoneNumber     String
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+
+  @@map("payments")
+}

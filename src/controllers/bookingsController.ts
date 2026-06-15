@@ -1,9 +1,16 @@
 import { PrismaClient } from "@prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import type { Request, Response } from "express"
-import jwt from "jsonwebtoken"
 import { Prisma } from "@prisma/client"
-import { scheduleSchema, updateScheduleSchema,bookingSchema} from "../models/schemas.js"
+import { bookingSchema} from "../models/schemas.js"
+import { toNumberValue } from "../lib/toNumberValue.js"
+import type { AuthUser } from "../lib/auth.js"
+import {
+  isCompanyAdmin,
+  isPlatformAdmin,
+  requireAdminAccess,
+  requireAuth,
+} from "../lib/auth.js"
 
 let prisma: PrismaClient | null = null;
 function getPrismaClient(): PrismaClient | null {
@@ -44,51 +51,29 @@ function sendError(
         },
     });
 }
-function toNumberValue<T>(value: T): T {
-    if (Array.isArray(value)) return value.map((item) => toNumberValue(item)) as T;
-    if (value && typeof value === "object") {
-        const obj = value as Record<string, unknown>;
-        const out: Record<string, unknown> = {};
-        Object.entries(obj).forEach(([key, item]) => {
-            if (item && typeof item === "object" && "toNumber" in (item as object)) {
-                out[key] = Number(item);
-            } else {
-                out[key] = toNumberValue(item);
-            }
-        });
-        return out as T;
-    }
-    return value;
-}
 function isMissingTableError(error: unknown) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021";
 }
 
-type AuthUser = { id: string; role: "ADMIN" | "CLIENT" };
 type AuthRequest = Request & { user?: AuthUser };
 
-function requireAdmin(req: Request, res: Response) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        sendError(res, 401, "UNAUTHORIZED", "Token manquant");
-        return null;
-    }
-    const token = authHeader.slice(7);
-    const jwtSecret = process.env.JWT_SECRET ?? "change-me";
-    try {
-        const payload = jwt.verify(token, jwtSecret) as AuthUser;
-        if (payload.role !== "ADMIN") {
-            sendError(res, 403, "FORBIDDEN", "Accès administrateur requis");
-            return null;
-        }
-        return payload;
-    } catch {
-        sendError(res, 401, "UNAUTHORIZED", "Token invalide");
-        return null;
-    }
+function requireAuthRequest(req: AuthRequest, res: Response): AuthUser | null {
+  const user = requireAuth(req, res);
+  if (user) req.user = user;
+  return user;
 }
 
+// gets the pending booking expiry date
+const BOOKING_PENDING_TTL_MINUTES = Number(process.env.BOOKING_PENDING_TTL_MINUTES ?? 10);
+function getPendingBookingExpiryDate() {
+  return new Date(Date.now() - BOOKING_PENDING_TTL_MINUTES * 60 * 1000);
+} // gets the pending booking expiry date
+
 export async function getAllBookings(req:Request,res:Response){
+    const user = requireAdminAccess(req, res)
+    if (!user) {
+      return;
+    }
     const client = getPrismaClient();
     if (!client) {
         return res.status(500).json({
@@ -100,6 +85,9 @@ export async function getAllBookings(req:Request,res:Response){
     }
     
     const bookings = await client.booking.findMany({
+        where: isCompanyAdmin(user) && user.companyId
+          ? { schedule: { route: { companyId: user.companyId } } }
+          : undefined,
         include: {
           user: { select: { id: true, name: true, email: true, phone: true } },
           schedule: {
@@ -116,7 +104,7 @@ return sendSuccess(res, toNumberValue(bookings));
 }
 
 export async function getBookingbyId(req:AuthRequest,res:Response) {
-    const user = requireAdmin(req, res)
+    const user = requireAuthRequest(req, res)
   if (!user) {
     return;
   }
@@ -164,7 +152,15 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
   
     if (!booking) return sendError(res, 404, "BOOKING_NOT_FOUND", "Réservation introuvable");
     if (!req.user) return sendError(res, 401, "UNAUTHORIZED", "Non autorisé");
-    if (booking.userId !== req.user.id && req.user.role !== "ADMIN") {
+    const bookingCompanyId = (
+      booking as { schedule?: { route?: { companyId?: string } } }
+    ).schedule?.route?.companyId;
+    const isOwner = booking.userId === req.user.id;
+    const isCompanyBookingAdmin =
+      isCompanyAdmin(req.user) &&
+      req.user.companyId &&
+      bookingCompanyId === req.user.companyId;
+    if (!isOwner && !isPlatformAdmin(req.user) && !isCompanyBookingAdmin) {
       return sendError(res, 403, "FORBIDDEN", "Accès non autorisé");
     }
   
@@ -173,7 +169,7 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
 }
 
 export async function createBooking(req:AuthRequest,res:Response){
-    const user = requireAdmin(req, res)
+    const user = requireAuthRequest(req, res)
     if (!user) {
       return;
     }
@@ -205,15 +201,6 @@ export async function createBooking(req:AuthRequest,res:Response){
     if (new Date(schedule.departureTime) <= new Date()) {
       return sendError(res, 400, "SCHEDULE_EXPIRED", "L'heure de départ est déjà passée");
     }
-    if (schedule.availableSeats < requestedSeatsCount) {
-      return sendError(
-        res,
-        400,
-        "INSUFFICIENT_SEATS",
-        `Seulement ${schedule.availableSeats} place(s) disponible(s)`
-      );
-    }
-  
     const duplicateSeats = selectedSeats.filter((seat, index) => selectedSeats.indexOf(seat) !== index);
     if (duplicateSeats.length > 0) {
       return sendError(res, 400, "DUPLICATE_SEATS", "La sélection contient des places en double");
@@ -224,10 +211,19 @@ export async function createBooking(req:AuthRequest,res:Response){
   
     try {
       const result = await client.$transaction(async (tx) => {
+        await tx.booking.updateMany({
+          where: {
+            scheduleId,
+            status: "PENDING",
+            createdAt: { lt: getPendingBookingExpiryDate() },
+          },
+          data: { status: "CANCELLED" },
+        });
+
         const txWithSeatSelection = tx as typeof tx & {
           seatSelection: {
             findMany(args: {
-              where: { scheduleId: string; booking: { status: { not: "CANCELLED" } } };
+              where: { scheduleId: string; booking: { status: "CONFIRMED" } };
               select: { seatNumber: true };
             }): Promise<Array<{ seatNumber: number }>>;
             createMany(args: {
@@ -238,7 +234,7 @@ export async function createBooking(req:AuthRequest,res:Response){
         const taken = await txWithSeatSelection.seatSelection.findMany({
           where: {
             scheduleId,
-            booking: { status: { not: "CANCELLED" } },
+            booking: { status: "CONFIRMED" },
           },
           select: { seatNumber: true },
         });
@@ -278,11 +274,6 @@ export async function createBooking(req:AuthRequest,res:Response){
             seatNumber,
           })),
         });
-        await tx.schedule.update({
-          where: { id: scheduleId },
-          data: { availableSeats: { decrement: finalSeats.length } },
-        });
-  
         return { booking, finalSeats };
       });
   
@@ -308,10 +299,6 @@ export async function createBooking(req:AuthRequest,res:Response){
               seatsBooked: requestedSeatsCount,
               totalPrice,
             },
-          });
-          await tx.schedule.update({
-            where: { id: scheduleId },
-            data: { availableSeats: { decrement: requestedSeatsCount } },
           });
           return newBooking;
         });

@@ -8,7 +8,11 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@prisma/client": ["./node_modules/@prisma/client"],
+      "@prisma/client/*": ["./node_modules/@prisma/client/*"]
+    }
   },
   "include": ["src/**/*.ts"]
 }
