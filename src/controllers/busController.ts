@@ -1,5 +1,3 @@
-import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
 import type { Request, Response } from "express";
 import { busSchema, updateBusSchema } from "../models/schemas.js";
 import {
@@ -9,19 +7,7 @@ import {
   requireAdminAccess,
   resolveListCompanyId,
 } from "../lib/auth.js";
-
-let prisma: PrismaClient | null = null;
-function getPrismaClient(): PrismaClient | null {
-  if (!process.env.DATABASE_URL) {
-    return null;
-  }
-  if (!prisma) {
-    prisma = new PrismaClient({
-      adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
-    });
-  }
-  return prisma;
-}
+import { getPrismaClient } from "../lib/prisma.js";
 function sendSuccess<T>(
   res: Response,
   data: T,
