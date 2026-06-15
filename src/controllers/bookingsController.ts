@@ -10,6 +10,7 @@ import {
   requireAuth,
 } from "../lib/auth.js"
 import { getPrismaClient } from "../lib/prisma.js"
+import { syncPaymentWithProvider } from "../services/payment-sync.js"
 
 function sendSuccess<T>(
     res: Response,
@@ -67,40 +68,27 @@ const bookingDetailInclude = {
   payment: true,
 } as Prisma.BookingInclude;
 
-async function reconcileBookingIfPaid(
-  client: PrismaClient,
-  bookingId: string
-) {
-  const booking = await client.booking.findUnique({
-    where: { id: bookingId },
-    include: {
-      payment: true,
-      schedule: { select: { id: true } },
-    },
-  });
-  if (
-    !booking ||
-    booking.status !== "PENDING" ||
-    booking.payment?.status !== "SUCCESS"
-  ) {
-    return null;
+async function loadBookingDetail(client: PrismaClient, bookingId: string) {
+  try {
+    return await client.booking.findUnique({
+      where: { id: bookingId },
+      include: bookingDetailInclude,
+    });
+  } catch (error) {
+    if (!isMissingTableError(error)) throw error;
+    return client.booking.findUnique({
+      where: { id: bookingId },
+      include: {
+        schedule: {
+          include: {
+            route: { include: { company: { select: { name: true } } } },
+            bus: { select: { model: true, plateNumber: true } },
+          },
+        },
+        payment: true,
+      },
+    });
   }
-
-  await client.$transaction(async (tx) => {
-    await tx.booking.update({
-      where: { id: booking.id },
-      data: { status: "CONFIRMED" },
-    });
-    await tx.schedule.update({
-      where: { id: booking.scheduleId },
-      data: { availableSeats: { decrement: booking.seatsBooked } },
-    });
-  });
-
-  return client.booking.findUnique({
-    where: { id: bookingId },
-    include: bookingDetailInclude,
-  });
 }
 
 export async function getAllBookings(req:Request,res:Response){
@@ -153,36 +141,8 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
   }
 
     const id = String(req.params.id);
-    let booking;
-    try {
-      booking = await client.booking.findUnique({
-        where: { id },
-        include: {
-          schedule: {
-            include: {
-              route: { include: { company: { select: { name: true } } } },
-              bus: { select: { model: true, plateNumber: true } },
-            },
-          },
-          seatSelections: { select: { seatNumber: true } },
-          payment: true,
-        } as Prisma.BookingInclude,
-      });
-    } catch (error) {
-      if (!isMissingTableError(error)) throw error;
-      booking = await client.booking.findUnique({
-        where: { id },
-        include: {
-          schedule: {
-            include: {
-              route: { include: { company: { select: { name: true } } } },
-              bus: { select: { model: true, plateNumber: true } },
-            },
-          },
-          payment: true,
-        },
-      });
-    }
+    await syncPaymentWithProvider(client, id);
+    const booking = await loadBookingDetail(client, id);
   
     if (!booking) return sendError(res, 404, "BOOKING_NOT_FOUND", "Réservation introuvable");
     if (!req.user) return sendError(res, 401, "UNAUTHORIZED", "Non autorisé");
@@ -196,11 +156,6 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
       bookingCompanyId === req.user.companyId;
     if (!isOwner && !isPlatformAdmin(req.user) && !isCompanyBookingAdmin) {
       return sendError(res, 403, "FORBIDDEN", "Accès non autorisé");
-    }
-
-    const reconciled = await reconcileBookingIfPaid(client, id);
-    if (reconciled) {
-      booking = reconciled;
     }
   
     return sendSuccess(res, toNumberValue(booking));

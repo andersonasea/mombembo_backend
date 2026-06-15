@@ -8,10 +8,13 @@ import { PrismaClient } from "@prisma/client";
 import { createPrismaPgAdapter } from "./lib/pg-adapter.js";
 import { loginSchema, registerSchema, paymentSchema } from "./models/schemas.js";
 import {
+  extractFlexpayReferences,
   initiateFlexpayPayment,
   isFlexpayConfigured,
+  resolveFlexpayWebhookStatus,
   validateFlexpayWebhookSecret,
 } from "./services/flexpay.js";
+import { finalizeSuccessfulPayment } from "./services/payment-sync.js";
 import CompanyRoutes from "./routes/companyRoutes.js";
 import BusRoutes from "./routes/busRoutes.js"
 import BusDestination from "./routes/busDestination.js"
@@ -92,6 +95,10 @@ app.use((req, _res, next) => {
 });
 
 type AuthRequest = Request & { user?: AuthUser };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
 
 function signToken(user: AuthUser) {
   return jwt.sign(
@@ -330,28 +337,14 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
     const updatedPayment = await prisma.payment.update({
       where: { id: createdPayment.id },
       data: {
-        transactionRef: flexpayResponse.providerReference || merchantReference,
+        transactionRef: merchantReference,
         status: flexpayResponse.status,
         paidAt: flexpayResponse.status === "SUCCESS" ? new Date() : null,
       },
     });
 
     if (flexpayResponse.status === "SUCCESS") {
-      await prisma.$transaction(async (tx) => {
-        const freshBooking = await tx.booking.findUnique({
-          where: { id: bookingId },
-          select: { id: true, status: true, scheduleId: true, seatsBooked: true },
-        });
-        if (!freshBooking || freshBooking.status === "CONFIRMED") return;
-        await tx.booking.update({
-          where: { id: bookingId },
-          data: { status: "CONFIRMED" },
-        });
-        await tx.schedule.update({
-          where: { id: freshBooking.scheduleId },
-          data: { availableSeats: { decrement: freshBooking.seatsBooked } },
-        });
-      });
+      await finalizeSuccessfulPayment(prisma, createdPayment.id, bookingId);
     }
 
     return sendSuccess(
@@ -393,59 +386,44 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
 });
 
 app.post("/api/payments/webhook/flexpay", async (req, res) => {
+  const payload = asRecord(req.body);
+  console.log("FlexPay webhook received", JSON.stringify(payload));
+
   if (!validateFlexpayWebhookSecret(req.headers as Record<string, unknown>)) {
     return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook Flexpay non autorisé");
   }
 
-  const payload = req.body as {
-    providerReference?: string;
-    transactionRef?: string;
-    reference?: string;
-    orderNumber?: string;
-    status?: string;
-    state?: string;
-    result?: string;
-  };
-
-  const reference =
-    payload.providerReference ?? payload.transactionRef ?? payload.reference ?? payload.orderNumber;
-  if (!reference) {
+  const references = extractFlexpayReferences(payload);
+  if (references.length === 0) {
     return sendError(res, 400, "INVALID_PAYLOAD", "Référence de transaction manquante");
   }
 
-  const normalized = String(payload.status ?? payload.state ?? payload.result ?? "").toUpperCase();
-  const isSuccess = ["SUCCESS", "SUCCEEDED", "PAID", "COMPLETED"].includes(normalized);
-  const status = isSuccess ? "SUCCESS" : "FAILED";
+  const providerStatus = resolveFlexpayWebhookStatus(payload);
+  const isSuccess = providerStatus === "SUCCESS";
+  const status = isSuccess ? "SUCCESS" : providerStatus === "FAILED" ? "FAILED" : "PENDING";
 
   const payment = await prisma.payment.findFirst({
-    where: { transactionRef: reference },
+    where: { transactionRef: { in: references } },
     include: { booking: true },
   });
 
   if (!payment) {
+    console.warn("FlexPay webhook: payment not found for references", references);
     return sendError(res, 404, "PAYMENT_NOT_FOUND", "Paiement introuvable");
   }
 
-  await prisma.$transaction(async (tx) => {
-    const freshBooking = await tx.booking.findUnique({
-      where: { id: payment.bookingId },
-      select: { id: true, status: true, scheduleId: true, seatsBooked: true },
-    });
-    await tx.payment.update({
+  if (status === "PENDING") {
+    return sendSuccess(res, { received: true, ignored: true });
+  }
+
+  if (isSuccess) {
+    await finalizeSuccessfulPayment(prisma, payment.id, payment.bookingId);
+  } else {
+    await prisma.payment.update({
       where: { id: payment.id },
-      data: { status, paidAt: isSuccess ? new Date() : null },
+      data: { status: "FAILED" },
     });
-    if (isSuccess && freshBooking && freshBooking.status !== "CONFIRMED") {
-      await tx.booking.update({
-        where: { id: payment.bookingId },
-        data: { status: "CONFIRMED" },
-      });
-      await tx.schedule.update({
-        where: { id: freshBooking.scheduleId },
-        data: { availableSeats: { decrement: freshBooking.seatsBooked } },
-      });
-    }
-  });
+  }
 
   return sendSuccess(res, { received: true });
 });
