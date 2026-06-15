@@ -5,7 +5,7 @@ import morgan from "morgan";
 import { compare, hash } from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
+import { createPrismaPgAdapter } from "./lib/pg-adapter.js";
 import { loginSchema, registerSchema, paymentSchema } from "./models/schemas.js";
 import {
   initiateFlexpayPayment,
@@ -28,7 +28,7 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required to start the backend API.");
 }
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  adapter: createPrismaPgAdapter(),
 });
 
 const PORT = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
