@@ -1,5 +1,5 @@
 import type { Request, Response } from "express"
-import { Prisma } from "@prisma/client"
+import { Prisma, type PrismaClient } from "@prisma/client"
 import { scheduleSchema, updateScheduleSchema } from "../models/schemas.js"
 import { toNumberValue } from "../lib/toNumberValue.js"
 import {
