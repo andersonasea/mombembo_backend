@@ -39,13 +39,28 @@ const PUBLIC_API_BASE_URL = process.env.PUBLIC_API_BASE_URL ?? `http://localhost
 const FLEXPAY_CALLBACK_URL =
   process.env.FLEXPAY_CALLBACK_URL ?? `${PUBLIC_API_BASE_URL}/api/payments/webhook/flexpay`;
 const BACKEND_ORIGIN = new URL(PUBLIC_API_BASE_URL).origin;
-const ALLOWED_ORIGINS = (
-  process.env.ALLOWED_ORIGINS ??
-  [FRONTEND_ORIGIN, "http://localhost:3000", "http://localhost:58118", BACKEND_ORIGIN].join(",")
-)
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const ALLOWED_ORIGINS = Array.from(
+  new Set(
+    (
+      process.env.ALLOWED_ORIGINS ??
+      [FRONTEND_ORIGIN, "http://localhost:3000", "http://localhost:58118", BACKEND_ORIGIN].join(",")
+    )
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+  )
+);
+
+function isOriginAllowed(origin: string) {
+  const normalized = origin.replace(/\/$/, "");
+  if (ALLOWED_ORIGINS.some((allowed) => allowed.replace(/\/$/, "") === normalized)) {
+    return true;
+  }
+  return /^https:\/\/[\w.-]+\.vercel\.app$/i.test(normalized);
+}
+
+console.log("CORS allowed origins:", ALLOWED_ORIGINS.join(", ") || "(none)");
+console.log("CORS also allows: https://*.vercel.app");
 
 app.use(
   cors(
@@ -53,10 +68,9 @@ app.use(
       origin(origin, callback) {
         // Mobile native clients usually do not send Origin; allow those requests.
         if (!origin) return callback(null, true);
-        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-        // Vercel production + preview deployments
-        if (/^https:\/\/[\w-]+\.vercel\.app$/i.test(origin)) return callback(null, true);
-        return callback(new Error(`CORS origin not allowed: ${origin}`));
+        if (isOriginAllowed(origin)) return callback(null, true);
+        console.warn(`CORS blocked origin: ${origin}`);
+        return callback(null, false);
       },
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
