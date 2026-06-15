@@ -9,7 +9,9 @@ import {
   requireAdminAccess,
   requireAuth,
 } from "../lib/auth.js"
-import { getPrismaClient } from "../lib/prisma.js"function sendSuccess<T>(
+import { getPrismaClient } from "../lib/prisma.js"
+
+function sendSuccess<T>(
     res: Response,
     data: T,
     status = 200,
