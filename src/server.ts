@@ -11,6 +11,7 @@ import {
   extractFlexpayReferences,
   initiateFlexpayPayment,
   isFlexpayConfigured,
+  resolveFlexpayCallbackUrl,
   resolveFlexpayWebhookStatus,
   validateFlexpayWebhookSecret,
 } from "./services/flexpay.js";
@@ -39,8 +40,7 @@ const JWT_SECRET = process.env.JWT_SECRET ?? "change-me";
 const BOOKING_PENDING_TTL_MINUTES = Number(process.env.BOOKING_PENDING_TTL_MINUTES ?? 10);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
 const PUBLIC_API_BASE_URL = process.env.PUBLIC_API_BASE_URL ?? `http://localhost:${PORT}`;
-const FLEXPAY_CALLBACK_URL =
-  process.env.FLEXPAY_CALLBACK_URL ?? `${PUBLIC_API_BASE_URL}/api/payments/webhook/flexpay`;
+const FLEXPAY_CALLBACK_URL = resolveFlexpayCallbackUrl(PUBLIC_API_BASE_URL);
 const BACKEND_ORIGIN = new URL(PUBLIC_API_BASE_URL).origin;
 const ALLOWED_ORIGINS = Array.from(
   new Set(
@@ -64,6 +64,7 @@ function isOriginAllowed(origin: string) {
 
 console.log("CORS allowed origins:", ALLOWED_ORIGINS.join(", ") || "(none)");
 console.log("CORS also allows: https://*.vercel.app");
+console.log("FlexPay callback URL:", FLEXPAY_CALLBACK_URL || "(not configured)");
 
 app.use(
   cors(
