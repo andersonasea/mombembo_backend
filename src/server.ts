@@ -54,6 +54,8 @@ app.use(
         // Mobile native clients usually do not send Origin; allow those requests.
         if (!origin) return callback(null, true);
         if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        // Vercel production + preview deployments
+        if (/^https:\/\/[\w-]+\.vercel\.app$/i.test(origin)) return callback(null, true);
         return callback(new Error(`CORS origin not allowed: ${origin}`));
       },
       credentials: true,
