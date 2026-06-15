@@ -439,6 +439,6 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   sendError(res, 500, "INTERNAL_SERVER_ERROR", "Erreur serveur");
 });
 
-app.listen(PORT, () => {
-  console.log(`Mobembo API listening on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Mobembo API listening on port ${PORT}`);
 });

@@ -5,7 +5,7 @@ services:
   - type: web
     name: mobembo-api
     runtime: node
-    buildCommand: npm install && npm run build && npm run db:migrate
+    buildCommand: npm install --include=dev && npm run build && npm run db:migrate
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
