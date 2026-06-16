@@ -229,26 +229,31 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   const { email, password } = parsed.data;
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return sendError(res, 401, "INVALID_CREDENTIALS", "Identifiants invalides");
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return sendError(res, 401, "INVALID_CREDENTIALS", "Identifiants invalides");
 
-  const isPasswordValid = await compare(password, user.password);
-  if (!isPasswordValid) return sendError(res, 401, "INVALID_CREDENTIALS", "Identifiants invalides");
+    const isPasswordValid = await compare(password, user.password);
+    if (!isPasswordValid) return sendError(res, 401, "INVALID_CREDENTIALS", "Identifiants invalides");
 
-  const companyId = (user as { companyId?: string | null }).companyId ?? null;
-  const company =
-    companyId != null
-      ? await prisma.transportCompany.findUnique({
-          where: { id: companyId },
-          select: { id: true, name: true },
-        })
-      : null;
+    const companyId = (user as { companyId?: string | null }).companyId ?? null;
+    const company =
+      companyId != null
+        ? await prisma.transportCompany.findUnique({
+            where: { id: companyId },
+            select: { id: true, name: true },
+          })
+        : null;
 
-  const token = signToken(toAuthUser(user));
-  return sendSuccess(res, {
-    token,
-    user: toPublicUser({ ...user, company }),
-  });
+    const token = signToken(toAuthUser(user));
+    return sendSuccess(res, {
+      token,
+      user: toPublicUser({ ...user, company }),
+    });
+  } catch (error) {
+    console.error("Login failed", { email, error });
+    return sendError(res, 503, "SERVICE_UNAVAILABLE", "Service temporairement indisponible, reessayez.");
+  }
 });
 app.use("/api/companies", CompanyRoutes)
 app.use("/api/buses", BusRoutes)
