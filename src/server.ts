@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import morgan from "morgan";
+import compression from "compression";
 import { compare, hash } from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
@@ -83,6 +84,7 @@ app.use(
   )
 );
 app.use(morgan("dev"));
+app.use(compression());
 app.use(express.json());
 
 // API versioning: expose v1 routes while keeping legacy /api compatibility.
@@ -332,7 +334,7 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       firstName,
       lastName,
       email: currentUser?.email ?? "client@mobembo.local",
-      callbackUrl: FLEXPAY_CALLBACK_URL,
+      callbackUrl: FLEXPAY_CALLBACK_URL
     });
 
     const updatedPayment = await prisma.payment.update({
