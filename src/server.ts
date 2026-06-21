@@ -22,6 +22,7 @@ import BusRoutes from "./routes/busRoutes.js"
 import BusDestination from "./routes/busDestination.js"
 import BusSchedule from "./routes/busSchedule.js"
 import BusBooking from "./routes/busBookings.js"
+import UserRoutes from "./routes/userRoutes.js"
 import { registerSwagger } from "./swagger.js";
 import { toNumberValue } from "./lib/toNumberValue.js";
 import type { AuthUser } from "./lib/auth.js";
@@ -86,7 +87,7 @@ app.use(
 );
 app.use(morgan("dev"));
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 // API versioning: expose v1 routes while keeping legacy /api compatibility.
 app.use((req, _res, next) => {
@@ -128,6 +129,8 @@ function toPublicUser(user: {
   id: string;
   name: string;
   email: string;
+  phone?: string | null;
+  imageUrl?: string | null;
   role: AuthUser["role"];
   companyId?: string | null;
   company?: { id: string; name: string } | null;
@@ -136,6 +139,8 @@ function toPublicUser(user: {
     id: user.id,
     name: user.name,
     email: user.email,
+    phone: user.phone ?? null,
+    imageUrl: user.imageUrl ?? null,
     role: user.role,
     companyId: user.companyId ?? null,
     companyName: user.company?.name ?? null,
@@ -261,6 +266,7 @@ app.use("/api/buses", BusRoutes)
 app.use("/api/routes", BusDestination)
 app.use("/api/schedules", BusSchedule)
 app.use("/api/bookings", BusBooking)
+app.use("/api/users", requireAuth, UserRoutes)
 
 app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
   const parsed = paymentSchema.safeParse(req.body);

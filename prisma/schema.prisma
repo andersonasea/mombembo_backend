@@ -44,6 +44,7 @@ model User {
   email         String            @unique
   phone         String?
   password      String
+  imageUrl      String?
   role          Role              @default(CLIENT)
   companyId     String?
   company       TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)

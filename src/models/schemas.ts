@@ -108,3 +108,27 @@ export const updateScheduleSchema = z
   .refine((data) => Object.keys(data).length > 0, {
     message: "Aucune donnée à mettre à jour",
   });
+
+const profileImageUrlSchema = z
+  .string()
+  .max(500_000, "Image trop volumineuse (max ~350 Ko)")
+  .refine(
+    (value) =>
+      value.startsWith("data:image/jpeg;base64,") ||
+      value.startsWith("data:image/png;base64,") ||
+      value.startsWith("data:image/webp;base64,"),
+    { message: "Format d'image non supporté (JPEG, PNG ou WebP)" }
+  );
+
+export const updateProfileSchema = z
+  .object({
+    name: z.string().min(2).optional(),
+    phone: z
+      .union([z.string().min(9), z.literal("")])
+      .optional()
+      .transform((value) => (value === "" ? null : value)),
+    imageUrl: profileImageUrlSchema.nullable().optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "Aucune donnée à mettre à jour",
+  });
