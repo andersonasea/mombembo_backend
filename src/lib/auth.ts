@@ -9,7 +9,9 @@ export type AuthUser = {
   companyId?: string | null;
 };
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "change-me";
+function getJwtSecret(): string {
+  return process.env.JWT_SECRET ?? "change-me";
+}
 
 function sendError(
   res: Response,
@@ -27,7 +29,7 @@ export function parseAuthUser(req: Request): AuthUser | null {
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   try {
-    return jwt.verify(authHeader.slice(7), JWT_SECRET) as AuthUser;
+    return jwt.verify(authHeader.slice(7), getJwtSecret()) as AuthUser;
   } catch {
     return null;
   }
