@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { checkFlexpayPaymentStatus } from "./flexpay.js";
+import { awardLoyaltyForBooking } from "./loyalty.js";
 
 export async function finalizeSuccessfulPayment(
   client: PrismaClient,
@@ -24,6 +25,7 @@ export async function finalizeSuccessfulPayment(
         where: { id: freshBooking.scheduleId },
         data: { availableSeats: { decrement: freshBooking.seatsBooked } },
       });
+      await awardLoyaltyForBooking(tx, bookingId);
     }
   });
 }

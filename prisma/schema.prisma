@@ -45,6 +45,19 @@ enum Gender {
   PREFER_NOT_TO_SAY
 }
 
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+enum LoyaltyTxType {
+  EARN
+  REDEEM
+  BONUS
+  ADJUST
+}
+
 model User {
   id            String            @id @default(cuid())
   name          String
@@ -58,6 +71,9 @@ model User {
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   bookings      Booking[]
+  loyaltyPoints Int               @default(0)
+  loyaltyTier   LoyaltyTier       @default(BRONZE)
+  loyaltyTx     LoyaltyTransaction[]
 
   @@map("users")
 }
@@ -174,4 +190,19 @@ model Payment {
   createdAt       DateTime      @default(now())
 
   @@map("payments")
+}
+
+model LoyaltyTransaction {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookingId    String?       @unique
+  type         LoyaltyTxType
+  points       Int
+  balanceAfter Int
+  description  String
+  createdAt    DateTime      @default(now())
+
+  @@index([userId, createdAt])
+  @@map("loyalty_transactions")
 }
