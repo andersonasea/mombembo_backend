@@ -12,6 +12,15 @@ type TrendRow = {
   revenue: number;
 };
 
+type RouteRankingRow = {
+  routeId: string;
+  departure: string;
+  destination: string;
+  companyName: string;
+  bookings: number;
+  revenue: number;
+};
+
 function sendSuccess<T>(res: Response, data: T) {
   return res.status(200).json({ data });
 }
@@ -97,7 +106,8 @@ async function queryTrend(
   toExclusive: Date,
   granularity: Granularity,
   status: "CONFIRMED" | "ALL",
-  companyId?: string | null
+  companyId?: string | null,
+  routeId?: string | null
 ): Promise<TrendRow[]> {
   const client = getPrismaClient();
   if (!client) return [];
@@ -115,6 +125,9 @@ async function queryTrend(
   const companyFilter =
     companyId != null ? Prisma.sql`AND r."companyId" = ${companyId}` : Prisma.empty;
 
+  const routeFilter =
+    routeId != null ? Prisma.sql`AND r.id = ${routeId}` : Prisma.empty;
+
   const rows = await client.$queryRaw<{ bucket: Date; count: bigint; revenue: string | number }[]>`
     SELECT ${truncExpr} AS bucket,
            COUNT(*)::bigint AS count,
@@ -126,6 +139,7 @@ async function queryTrend(
       AND b."createdAt" < ${toExclusive}
       ${statusFilter}
       ${companyFilter}
+      ${routeFilter}
     GROUP BY bucket
     ORDER BY bucket ASC
   `;
@@ -133,6 +147,58 @@ async function queryTrend(
   return rows.map((row) => ({
     bucket: new Date(row.bucket),
     count: Number(row.count),
+    revenue: Number(row.revenue),
+  }));
+}
+
+async function queryRouteRanking(
+  from: Date,
+  toExclusive: Date,
+  status: "CONFIRMED" | "ALL",
+  companyId?: string | null
+): Promise<RouteRankingRow[]> {
+  const client = getPrismaClient();
+  if (!client) return [];
+
+  const statusFilter =
+    status === "ALL" ? Prisma.empty : Prisma.sql`AND b.status = 'CONFIRMED'`;
+
+  const companyFilter =
+    companyId != null ? Prisma.sql`AND r."companyId" = ${companyId}` : Prisma.empty;
+
+  const rows = await client.$queryRaw<{
+    routeId: string;
+    departure: string;
+    destination: string;
+    companyName: string;
+    bookings: bigint;
+    revenue: string | number;
+  }[]>`
+    SELECT r.id AS "routeId",
+           r.departure,
+           r.destination,
+           c.name AS "companyName",
+           COUNT(*)::bigint AS bookings,
+           COALESCE(SUM(b."totalPrice"), 0) AS revenue
+    FROM bookings b
+    INNER JOIN schedules s ON b."scheduleId" = s.id
+    INNER JOIN routes r ON s."routeId" = r.id
+    INNER JOIN transport_companies c ON r."companyId" = c.id
+    WHERE b."createdAt" >= ${from}
+      AND b."createdAt" < ${toExclusive}
+      ${statusFilter}
+      ${companyFilter}
+    GROUP BY r.id, r.departure, r.destination, c.name
+    ORDER BY revenue DESC
+    LIMIT 10
+  `;
+
+  return rows.map((row) => ({
+    routeId: row.routeId,
+    departure: row.departure,
+    destination: row.destination,
+    companyName: row.companyName,
+    bookings: Number(row.bookings),
     revenue: Number(row.revenue),
   }));
 }
@@ -156,7 +222,7 @@ export async function getBookingsTrend(req: Request, res: Response) {
     return sendError(res, 500, "CONFIG_ERROR", "DATABASE_URL manquante");
   }
 
-  const { granularity, status } = parsed.data;
+  const { granularity, status, routeId } = parsed.data;
   const toDate = parsed.data.to ? parseDateOnly(parsed.data.to) : parseDateOnly(formatDateOnly(new Date()));
   const fromDate = parsed.data.from
     ? parseDateOnly(parsed.data.from)
@@ -171,10 +237,24 @@ export async function getBookingsTrend(req: Request, res: Response) {
   const previousFrom = addToBucket(fromDate, "day", -periodDays);
   const companyId = isCompanyAdmin(user) ? user.companyId : null;
 
+  if (routeId) {
+    const route = await client.route.findUnique({
+      where: { id: routeId },
+      select: { id: true, companyId: true, departure: true, destination: true },
+    });
+    if (!route) {
+      return sendError(res, 404, "ROUTE_NOT_FOUND", "Ligne introuvable");
+    }
+    if (companyId != null && route.companyId !== companyId) {
+      return sendError(res, 403, "FORBIDDEN", "Accès non autorisé pour cette ligne");
+    }
+  }
+
   try {
-    const [currentRows, previousRows] = await Promise.all([
-      queryTrend(fromDate, toExclusive, granularity, status, companyId),
-      queryTrend(previousFrom, fromDate, granularity, status, companyId),
+    const [currentRows, previousRows, routeRanking] = await Promise.all([
+      queryTrend(fromDate, toExclusive, granularity, status, companyId, routeId ?? null),
+      queryTrend(previousFrom, fromDate, granularity, status, companyId, routeId ?? null),
+      queryRouteRanking(fromDate, toExclusive, status, companyId),
     ]);
 
     const points = fillTrendPoints(fromDate, toDate, granularity, currentRows);
@@ -185,6 +265,7 @@ export async function getBookingsTrend(req: Request, res: Response) {
 
     return sendSuccess(res, {
       points,
+      routeRanking,
       summary: {
         totalBookings,
         totalRevenue,
@@ -198,6 +279,7 @@ export async function getBookingsTrend(req: Request, res: Response) {
         to: formatDateOnly(toDate),
         granularity,
         status,
+        routeId: routeId ?? null,
       },
     });
   } catch (error) {

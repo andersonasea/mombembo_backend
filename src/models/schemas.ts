@@ -138,4 +138,5 @@ export const bookingsTrendQuerySchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   granularity: z.enum(["day", "week", "month"]).optional().default("day"),
   status: z.enum(["CONFIRMED", "ALL"]).optional().default("CONFIRMED"),
+  routeId: z.string().min(1).optional(),
 });
