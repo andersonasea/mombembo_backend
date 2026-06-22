@@ -203,6 +203,259 @@ async function queryRouteRanking(
   }));
 }
 
+const GENDER_KEYS = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY", "UNKNOWN"] as const;
+const AGE_GROUP_KEYS = ["0-17", "18-34", "35-49", "50-64", "65+", "unknown"] as const;
+
+type DemographicRow = { bucket: Date; segment: string; count: number };
+
+function pivotDemographicTrend(
+  from: Date,
+  to: Date,
+  granularity: Granularity,
+  rows: DemographicRow[],
+  segmentKeys: readonly string[]
+) {
+  const map = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    const key = bucketKey(row.bucket, granularity);
+    if (!map.has(key)) map.set(key, new Map());
+    map.get(key)!.set(row.segment, row.count);
+  }
+
+  const points: Array<{ date: string; label: string; [key: string]: string | number }> = [];
+  let cursor = alignBucketStart(from, granularity);
+  const end = alignBucketStart(to, granularity);
+
+  while (cursor <= end) {
+    const key = bucketKey(cursor, granularity);
+    const segmentMap = map.get(key);
+    const point: { date: string; label: string; [key: string]: string | number } = {
+      date: key,
+      label: formatBucketLabel(cursor, granularity),
+    };
+    for (const segment of segmentKeys) {
+      point[segment] = segmentMap?.get(segment) ?? 0;
+    }
+    points.push(point);
+    cursor = addToBucket(cursor, granularity, 1);
+  }
+
+  return points;
+}
+
+function buildSummary(rows: DemographicRow[], segmentKeys: readonly string[]) {
+  const totals = new Map<string, number>();
+  for (const key of segmentKeys) totals.set(key, 0);
+  for (const row of rows) {
+    totals.set(row.segment, (totals.get(row.segment) ?? 0) + row.count);
+  }
+  const total = Array.from(totals.values()).reduce((sum, n) => sum + n, 0);
+  return segmentKeys
+    .map((segment) => ({
+      segment,
+      count: totals.get(segment) ?? 0,
+      percent: total > 0 ? Math.round(((totals.get(segment) ?? 0) / total) * 1000) / 10 : 0,
+    }))
+    .filter((item) => item.count > 0);
+}
+
+async function queryGenderTrend(
+  from: Date,
+  toExclusive: Date,
+  granularity: Granularity,
+  status: "CONFIRMED" | "ALL",
+  companyId?: string | null,
+  routeId?: string | null
+): Promise<DemographicRow[]> {
+  const client = getPrismaClient();
+  if (!client) return [];
+
+  const truncExpr =
+    granularity === "day"
+      ? Prisma.sql`DATE(b."createdAt")`
+      : granularity === "week"
+        ? Prisma.sql`date_trunc('week', b."createdAt")::date`
+        : Prisma.sql`date_trunc('month', b."createdAt")::date`;
+
+  const statusFilter =
+    status === "ALL" ? Prisma.empty : Prisma.sql`AND b.status = 'CONFIRMED'`;
+
+  const companyFilter =
+    companyId != null ? Prisma.sql`AND r."companyId" = ${companyId}` : Prisma.empty;
+
+  const routeFilter =
+    routeId != null ? Prisma.sql`AND r.id = ${routeId}` : Prisma.empty;
+
+  try {
+    const rows = await client.$queryRaw<{ bucket: Date; gender: string; count: bigint }[]>`
+      SELECT ${truncExpr} AS bucket,
+             COALESCE(ss.gender::text, 'UNKNOWN') AS gender,
+             COUNT(*)::bigint AS count
+      FROM seat_selections ss
+      INNER JOIN bookings b ON ss."bookingId" = b.id
+      INNER JOIN schedules s ON b."scheduleId" = s.id
+      INNER JOIN routes r ON s."routeId" = r.id
+      WHERE b."createdAt" >= ${from}
+        AND b."createdAt" < ${toExclusive}
+        ${statusFilter}
+        ${companyFilter}
+        ${routeFilter}
+      GROUP BY bucket, gender
+      ORDER BY bucket ASC
+    `;
+
+    return rows.map((row) => ({
+      bucket: new Date(row.bucket),
+      segment: row.gender,
+      count: Number(row.count),
+    }));
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function queryAgeTrend(
+  from: Date,
+  toExclusive: Date,
+  granularity: Granularity,
+  status: "CONFIRMED" | "ALL",
+  companyId?: string | null,
+  routeId?: string | null
+): Promise<DemographicRow[]> {
+  const client = getPrismaClient();
+  if (!client) return [];
+
+  const truncExpr =
+    granularity === "day"
+      ? Prisma.sql`DATE(b."createdAt")`
+      : granularity === "week"
+        ? Prisma.sql`date_trunc('week', b."createdAt")::date`
+        : Prisma.sql`date_trunc('month', b."createdAt")::date`;
+
+  const statusFilter =
+    status === "ALL" ? Prisma.empty : Prisma.sql`AND b.status = 'CONFIRMED'`;
+
+  const companyFilter =
+    companyId != null ? Prisma.sql`AND r."companyId" = ${companyId}` : Prisma.empty;
+
+  const routeFilter =
+    routeId != null ? Prisma.sql`AND r.id = ${routeId}` : Prisma.empty;
+
+  const ageGroupExpr = Prisma.sql`
+    CASE
+      WHEN ss.age IS NULL THEN 'unknown'
+      WHEN ss.age < 18 THEN '0-17'
+      WHEN ss.age < 35 THEN '18-34'
+      WHEN ss.age < 50 THEN '35-49'
+      WHEN ss.age < 65 THEN '50-64'
+      ELSE '65+'
+    END
+  `;
+
+  try {
+    const rows = await client.$queryRaw<{ bucket: Date; age_group: string; count: bigint }[]>`
+      SELECT ${truncExpr} AS bucket,
+             ${ageGroupExpr} AS age_group,
+             COUNT(*)::bigint AS count
+      FROM seat_selections ss
+      INNER JOIN bookings b ON ss."bookingId" = b.id
+      INNER JOIN schedules s ON b."scheduleId" = s.id
+      INNER JOIN routes r ON s."routeId" = r.id
+      WHERE b."createdAt" >= ${from}
+        AND b."createdAt" < ${toExclusive}
+        ${statusFilter}
+        ${companyFilter}
+        ${routeFilter}
+      GROUP BY bucket, age_group
+      ORDER BY bucket ASC
+    `;
+
+    return rows.map((row) => ({
+      bucket: new Date(row.bucket),
+      segment: row.age_group,
+      count: Number(row.count),
+    }));
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function getPassengerDemographics(req: Request, res: Response) {
+  const user = requireAdminAccess(req, res);
+  if (!user) return;
+
+  const parsed = bookingsTrendQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return sendError(res, 400, "VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Paramètres invalides");
+  }
+
+  const client = getPrismaClient();
+  if (!client) {
+    return sendError(res, 500, "CONFIG_ERROR", "DATABASE_URL manquante");
+  }
+
+  const { granularity, status, routeId } = parsed.data;
+  const toDate = parsed.data.to ? parseDateOnly(parsed.data.to) : parseDateOnly(formatDateOnly(new Date()));
+  const fromDate = parsed.data.from
+    ? parseDateOnly(parsed.data.from)
+    : addToBucket(toDate, "day", -29);
+
+  if (fromDate > toDate) {
+    return sendError(res, 400, "VALIDATION_ERROR", "La date de début doit précéder la date de fin");
+  }
+
+  const toExclusive = addToBucket(toDate, "day", 1);
+  const companyId = isCompanyAdmin(user) ? user.companyId : null;
+
+  if (routeId) {
+    const route = await client.route.findUnique({
+      where: { id: routeId },
+      select: { id: true, companyId: true },
+    });
+    if (!route) {
+      return sendError(res, 404, "ROUTE_NOT_FOUND", "Ligne introuvable");
+    }
+    if (companyId != null && route.companyId !== companyId) {
+      return sendError(res, 403, "FORBIDDEN", "Accès non autorisé pour cette ligne");
+    }
+  }
+
+  try {
+    const [genderRows, ageRows] = await Promise.all([
+      queryGenderTrend(fromDate, toExclusive, granularity, status, companyId, routeId ?? null),
+      queryAgeTrend(fromDate, toExclusive, granularity, status, companyId, routeId ?? null),
+    ]);
+
+    const totalPassengers =
+      genderRows.reduce((sum, row) => sum + row.count, 0) ||
+      ageRows.reduce((sum, row) => sum + row.count, 0);
+
+    return sendSuccess(res, {
+      genderTrend: pivotDemographicTrend(fromDate, toDate, granularity, genderRows, GENDER_KEYS),
+      ageTrend: pivotDemographicTrend(fromDate, toDate, granularity, ageRows, AGE_GROUP_KEYS),
+      genderSummary: buildSummary(genderRows, GENDER_KEYS),
+      ageSummary: buildSummary(ageRows, AGE_GROUP_KEYS),
+      summary: { totalPassengers },
+      meta: {
+        from: formatDateOnly(fromDate),
+        to: formatDateOnly(toDate),
+        granularity,
+        status,
+        routeId: routeId ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("getPassengerDemographics failed", error);
+    return sendError(res, 500, "ANALYTICS_ERROR", "Impossible de charger les tendances passagers");
+  }
+}
+
 function percentChange(current: number, previous: number): number | null {
   if (previous === 0) return current > 0 ? 100 : null;
   return Math.round(((current - previous) / previous) * 1000) / 10;
