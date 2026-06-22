@@ -24,6 +24,7 @@ import BusSchedule from "./routes/busSchedule.js"
 import BusBooking from "./routes/busBookings.js"
 import UserRoutes from "./routes/userRoutes.js"
 import AdminAnalyticsRoutes from "./routes/adminAnalyticsRoutes.js"
+import SearchRoutes from "./routes/searchRoutes.js"
 import { registerSwagger } from "./swagger.js";
 import { toNumberValue } from "./lib/toNumberValue.js";
 import type { AuthUser } from "./lib/auth.js";
@@ -266,6 +267,7 @@ app.use("/api/companies", CompanyRoutes)
 app.use("/api/buses", BusRoutes)
 app.use("/api/routes", BusDestination)
 app.use("/api/schedules", BusSchedule)
+app.use("/api/search", SearchRoutes)
 app.use("/api/bookings", BusBooking)
 app.use("/api/users", requireAuth, UserRoutes)
 app.use("/api/admin/analytics", AdminAnalyticsRoutes)

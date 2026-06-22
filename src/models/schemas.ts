@@ -183,3 +183,13 @@ export const bookingsTrendQuerySchema = z.object({
   status: z.enum(["CONFIRMED", "ALL"]).optional().default("CONFIRMED"),
   routeId: z.string().min(1).optional(),
 });
+
+export const tripSearchQuerySchema = z.object({
+  departure: z.string().min(2),
+  destination: z.string().min(2),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  maxPrice: z.coerce.number().positive(),
+  timeFrom: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  timeTo: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  minSeats: z.coerce.number().int().min(1).optional().default(1),
+});
