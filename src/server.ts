@@ -23,6 +23,7 @@ import BusDestination from "./routes/busDestination.js"
 import BusSchedule from "./routes/busSchedule.js"
 import BusBooking from "./routes/busBookings.js"
 import UserRoutes from "./routes/userRoutes.js"
+import AdminAnalyticsRoutes from "./routes/adminAnalyticsRoutes.js"
 import { registerSwagger } from "./swagger.js";
 import { toNumberValue } from "./lib/toNumberValue.js";
 import type { AuthUser } from "./lib/auth.js";
@@ -267,6 +268,7 @@ app.use("/api/routes", BusDestination)
 app.use("/api/schedules", BusSchedule)
 app.use("/api/bookings", BusBooking)
 app.use("/api/users", requireAuth, UserRoutes)
+app.use("/api/admin/analytics", AdminAnalyticsRoutes)
 
 app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
   const parsed = paymentSchema.safeParse(req.body);

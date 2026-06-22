@@ -132,3 +132,10 @@ export const updateProfileSchema = z
   .refine((data) => Object.keys(data).length > 0, {
     message: "Aucune donnée à mettre à jour",
   });
+
+export const bookingsTrendQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  granularity: z.enum(["day", "week", "month"]).optional().default("day"),
+  status: z.enum(["CONFIRMED", "ALL"]).optional().default("CONFIRMED"),
+});
