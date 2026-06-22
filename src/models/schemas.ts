@@ -193,3 +193,7 @@ export const tripSearchQuerySchema = z.object({
   timeTo: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   minSeats: z.coerce.number().int().min(1).optional().default(1),
 });
+
+export const routeLocationsQuerySchema = z.object({
+  departure: z.string().min(2).optional(),
+});

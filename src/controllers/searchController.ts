@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { tripSearchQuerySchema } from "../models/schemas.js";
+import { routeLocationsQuerySchema, tripSearchQuerySchema } from "../models/schemas.js";
 import { toNumberValue } from "../lib/toNumberValue.js";
 import { getPrismaClient } from "../lib/prisma.js";
 
@@ -68,8 +68,8 @@ export async function searchTrips(req: Request, res: Response) {
       departureTime: { gte, lte },
       route: {
         price: { lte: maxPrice },
-        departure: { contains: departure, mode: "insensitive" },
-        destination: { contains: destination, mode: "insensitive" },
+        departure: { equals: departure, mode: "insensitive" },
+        destination: { equals: destination, mode: "insensitive" },
         company: { isActive: true },
       },
     },
@@ -88,4 +88,48 @@ export async function searchTrips(req: Request, res: Response) {
     count: trips.length,
     filters: { departure, destination, date, maxPrice, timeFrom, timeTo, minSeats },
   });
+}
+
+const activeCompanyRoutes = { company: { isActive: true } } as const;
+
+export async function getRouteLocations(req: Request, res: Response) {
+  const parsed = routeLocationsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return sendError(
+      res,
+      400,
+      "VALIDATION_ERROR",
+      parsed.error.issues[0]?.message ?? "Paramètres invalides"
+    );
+  }
+
+  const client = getPrismaClient();
+  if (!client) {
+    return sendError(res, 500, "CONFIG_ERROR", "DATABASE_URL manquante");
+  }
+
+  const { departure } = parsed.data;
+
+  const [departureRows, destinationRows] = await Promise.all([
+    client.route.groupBy({
+      by: ["departure"],
+      where: activeCompanyRoutes,
+      orderBy: { departure: "asc" },
+    }),
+    departure
+      ? client.route.groupBy({
+          by: ["destination"],
+          where: {
+            ...activeCompanyRoutes,
+            departure: { equals: departure, mode: "insensitive" },
+          },
+          orderBy: { destination: "asc" },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const departures = departureRows.map((row) => row.departure);
+  const destinations = destinationRows.map((row) => row.destination);
+
+  return sendSuccess(res, { departures, destinations });
 }
