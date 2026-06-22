@@ -11,7 +11,9 @@ export default defineConfig({
     path: "prisma/migrations",
     seed: "tsx prisma/seed.ts",
   },
+  // CLI (migrate, seed) : connexion directe pour éviter la limite du pooler Supabase.
+  // Le runtime utilise DATABASE_URL via pg-adapter.ts.
   datasource: {
-    url: process.env["DATABASE_URL"]!,
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"]!,
   },
 });

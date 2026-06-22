@@ -5,13 +5,15 @@ services:
   - type: web
     name: mobembo-api
     runtime: node
-    buildCommand: npm install --include=dev && npm run build && npm run db:migrate
-    startCommand: npm start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run start:prod
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true

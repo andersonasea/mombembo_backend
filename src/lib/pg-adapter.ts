@@ -17,11 +17,16 @@ export function createPrismaPgAdapter() {
     connectionString.includes("supabase.com") ||
     /sslmode=(require|verify-full|prefer)/i.test(connectionString);
 
-  if (needsSsl) {
-    const pool = new pg.Pool({
-      connectionString: stripSslMode(connectionString),
-      ssl: { rejectUnauthorized: false },
-    });
+  const isSupabasePooler = connectionString.includes("pooler.supabase.com");
+  const poolOptions: pg.PoolConfig = {
+    connectionString: stripSslMode(connectionString),
+    ...(needsSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+    // Session pooler Supabase : max 15 connexions partagées — garder le pool petit.
+    ...(isSupabasePooler ? { max: 3, idleTimeoutMillis: 20_000 } : {}),
+  };
+
+  if (needsSsl || isSupabasePooler) {
+    const pool = new pg.Pool(poolOptions);
     return new PrismaPg(pool);
   }
 
