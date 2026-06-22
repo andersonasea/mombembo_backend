@@ -38,6 +38,13 @@ enum ScheduleStatus {
   COMPLETED
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
 model User {
   id            String            @id @default(cuid())
   name          String
@@ -136,13 +143,18 @@ model Booking {
 }
 
 model SeatSelection {
-  id         String   @id @default(cuid())
-  bookingId  String
-  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  scheduleId String
-  schedule   Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  seatNumber Int
-  createdAt  DateTime @default(now())
+  id              String   @id @default(cuid())
+  bookingId       String
+  booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  scheduleId      String
+  schedule        Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  seatNumber      Int
+  passengerName   String?
+  gender          Gender?
+  age             Int?
+  needsAssistance Boolean  @default(false)
+  assistanceNotes String?
+  createdAt       DateTime @default(now())
 
   @@unique([scheduleId, seatNumber])
   @@index([bookingId])

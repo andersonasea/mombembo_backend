@@ -1,13 +1,56 @@
 import { z } from "zod";
 
+const genderEnum = z.enum(["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"]);
+
+const passengerSchema = z.object({
+  seatNumber: z.coerce.number().int().min(1),
+  passengerName: z.string().min(2).optional(),
+  gender: genderEnum.optional(),
+  age: z.coerce.number().int().min(0).max(120),
+  needsAssistance: z.boolean().default(false),
+  assistanceNotes: z.string().max(500).optional(),
+});
+
 export const bookingSchema = z
   .object({
     scheduleId: z.string().min(1),
     seatsBooked: z.coerce.number().int().min(1).optional(),
     selectedSeats: z.array(z.coerce.number().int().min(1)).optional(),
+    passengers: z.array(passengerSchema).optional(),
   })
   .refine((data) => (data.selectedSeats?.length ?? 0) > 0 || !!data.seatsBooked, {
     message: "Sélectionnez au moins une place",
+  })
+  .superRefine((data, ctx) => {
+    if (!data.passengers || data.passengers.length === 0) return;
+
+    const seats = data.selectedSeats ?? [];
+    if (data.passengers.length !== seats.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Un passager par place sélectionnée",
+        path: ["passengers"],
+      });
+      return;
+    }
+
+    const seatSet = new Set(seats);
+    for (const [index, passenger] of data.passengers.entries()) {
+      if (!seatSet.has(passenger.seatNumber)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `La place ${passenger.seatNumber} n'est pas sélectionnée`,
+          path: ["passengers", index, "seatNumber"],
+        });
+      }
+      if (passenger.needsAssistance && !passenger.assistanceNotes?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Précisez le type d'assistance requis",
+          path: ["passengers", index, "assistanceNotes"],
+        });
+      }
+    }
   });
 
 export const busSchema = z.object({

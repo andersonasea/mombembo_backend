@@ -64,7 +64,16 @@ const bookingDetailInclude = {
       bus: { select: { model: true, plateNumber: true } },
     },
   },
-  seatSelections: { select: { seatNumber: true } },
+  seatSelections: {
+    select: {
+      seatNumber: true,
+      passengerName: true,
+      gender: true,
+      age: true,
+      needsAssistance: true,
+      assistanceNotes: true,
+    },
+  },
   payment: true,
 } as Prisma.BookingInclude;
 
@@ -119,6 +128,16 @@ export async function getAllBookings(req:Request,res:Response){
             },
           },
           payment: { select: { id: true, status: true, method: true, transactionRef: true } },
+          seatSelections: {
+            select: {
+              seatNumber: true,
+              passengerName: true,
+              gender: true,
+              age: true,
+              needsAssistance: true,
+              assistanceNotes: true,
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
 })
@@ -184,6 +203,9 @@ export async function createBooking(req:AuthRequest,res:Response){
   
     const { scheduleId } = parsed.data;
     const selectedSeats = parsed.data.selectedSeats ?? [];
+    const passengersBySeat = new Map(
+      (parsed.data.passengers ?? []).map((passenger) => [passenger.seatNumber, passenger])
+    );
     const requestedSeatsCount = selectedSeats.length > 0 ? selectedSeats.length : parsed.data.seatsBooked!;
     const schedule = await client.schedule.findUnique({
       where: { id: scheduleId },
@@ -262,11 +284,19 @@ export async function createBooking(req:AuthRequest,res:Response){
           },
         });
         await txWithSeatSelection.seatSelection.createMany({
-          data: finalSeats.map((seatNumber) => ({
-            bookingId: booking.id,
-            scheduleId,
-            seatNumber,
-          })),
+          data: finalSeats.map((seatNumber) => {
+            const passenger = passengersBySeat.get(seatNumber);
+            return {
+              bookingId: booking.id,
+              scheduleId,
+              seatNumber,
+              passengerName: passenger?.passengerName,
+              gender: passenger?.gender,
+              age: passenger?.age,
+              needsAssistance: passenger?.needsAssistance ?? false,
+              assistanceNotes: passenger?.assistanceNotes?.trim() || null,
+            };
+          }),
         });
         return { booking, finalSeats };
       });
