@@ -197,3 +197,26 @@ export const tripSearchQuerySchema = z.object({
 export const routeLocationsQuerySchema = z.object({
   departure: z.string().min(2).optional(),
 });
+
+export const createCompanyAdminSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  phone: z.string().min(9).optional(),
+  password: z.string().min(6),
+  companyId: z.string().min(1, "Société requise"),
+});
+
+export const updateCompanyAdminSchema = z
+  .object({
+    name: z.string().min(2).optional(),
+    email: z.string().email().optional(),
+    phone: z
+      .union([z.string().min(9), z.literal("")])
+      .optional()
+      .transform((value) => (value === "" ? null : value)),
+    password: z.string().min(6).optional(),
+    companyId: z.string().min(1).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "Aucune donnée à mettre à jour",
+  });
