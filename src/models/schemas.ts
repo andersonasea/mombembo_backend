@@ -71,12 +71,24 @@ export const updateBusSchema = z
     message: "Aucune donnée à mettre à jour",
   });
 
+const imageDataUrlSchema = z
+  .string()
+  .max(500_000, "Image trop volumineuse (max ~350 Ko)")
+  .refine(
+    (value) =>
+      value.startsWith("data:image/jpeg;base64,") ||
+      value.startsWith("data:image/png;base64,") ||
+      value.startsWith("data:image/webp;base64,"),
+    { message: "Format d'image non supporté (JPEG, PNG ou WebP)" }
+  );
+
 export const companySchema = z.object({
     name: z.string().min(2),
     phone: z.string().min(9),
     email: z.string().email(),
     address: z.string().optional(),
     description: z.string().optional(),
+    logo: imageDataUrlSchema.optional(),
   });
 
 export const updateCompanySchema = z
@@ -87,6 +99,7 @@ export const updateCompanySchema = z
     address: z.string().optional(),
     description: z.string().optional(),
     isActive: z.boolean().optional(),
+    logo: imageDataUrlSchema.nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "Aucune donnée à mettre à jour",
@@ -152,16 +165,7 @@ export const updateScheduleSchema = z
     message: "Aucune donnée à mettre à jour",
   });
 
-const profileImageUrlSchema = z
-  .string()
-  .max(500_000, "Image trop volumineuse (max ~350 Ko)")
-  .refine(
-    (value) =>
-      value.startsWith("data:image/jpeg;base64,") ||
-      value.startsWith("data:image/png;base64,") ||
-      value.startsWith("data:image/webp;base64,"),
-    { message: "Format d'image non supporté (JPEG, PNG ou WebP)" }
-  );
+const profileImageUrlSchema = imageDataUrlSchema;
 
 export const updateProfileSchema = z
   .object({
