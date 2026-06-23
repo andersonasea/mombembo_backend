@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import type { AuthUser } from "../lib/auth.js";
 import { getPrismaClient } from "../lib/prisma.js";
-import { getLoyaltySummary } from "../services/loyalty.js";
+import { getLoyaltySummary, type LoyaltyDbClient } from "../services/loyalty.js";
 
 type AuthRequest = Pick<Request, "body" | "params" | "query"> & { user?: AuthUser };
 
@@ -22,7 +22,7 @@ export async function getMyLoyalty(req: AuthRequest, res: Response) {
   }
 
   try {
-    const summary = await getLoyaltySummary(client, req.user.id);
+    const summary = await getLoyaltySummary(client as unknown as LoyaltyDbClient, req.user.id);
     if (!summary) return sendError(res, 404, "USER_NOT_FOUND", "Utilisateur introuvable");
     return sendSuccess(res, summary);
   } catch (error) {

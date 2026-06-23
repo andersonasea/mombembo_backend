@@ -57,6 +57,16 @@ function getPendingBookingExpiryDate() {
   return new Date(Date.now() - BOOKING_PENDING_TTL_MINUTES * 60 * 1000);
 }
 
+/** Select passager — cast pour compatibilité si le client Prisma IDE est stale. */
+const seatSelectionPassengerSelect = {
+  seatNumber: true,
+  passengerName: true,
+  gender: true,
+  age: true,
+  needsAssistance: true,
+  assistanceNotes: true,
+} as unknown as Prisma.SeatSelectionSelect;
+
 const bookingDetailInclude = {
   schedule: {
     include: {
@@ -64,16 +74,7 @@ const bookingDetailInclude = {
       bus: { select: { model: true, plateNumber: true } },
     },
   },
-  seatSelections: {
-    select: {
-      seatNumber: true,
-      passengerName: true,
-      gender: true,
-      age: true,
-      needsAssistance: true,
-      assistanceNotes: true,
-    },
-  },
+  seatSelections: { select: seatSelectionPassengerSelect },
   payment: true,
 } as Prisma.BookingInclude;
 
@@ -128,17 +129,8 @@ export async function getAllBookings(req:Request,res:Response){
             },
           },
           payment: { select: { id: true, status: true, method: true, transactionRef: true } },
-          seatSelections: {
-            select: {
-              seatNumber: true,
-              passengerName: true,
-              gender: true,
-              age: true,
-              needsAssistance: true,
-              assistanceNotes: true,
-            },
-          },
-        },
+          seatSelections: { select: seatSelectionPassengerSelect },
+        } as Prisma.BookingInclude,
         orderBy: { createdAt: "desc" },
 })
 return sendSuccess(res, toNumberValue(bookings));
@@ -243,7 +235,16 @@ export async function createBooking(req:AuthRequest,res:Response){
               select: { seatNumber: true };
             }): Promise<Array<{ seatNumber: number }>>;
             createMany(args: {
-              data: Array<{ bookingId: string; scheduleId: string; seatNumber: number }>;
+              data: Array<{
+                bookingId: string;
+                scheduleId: string;
+                seatNumber: number;
+                passengerName?: string;
+                gender?: "MALE" | "FEMALE" | "OTHER" | "PREFER_NOT_TO_SAY";
+                age?: number;
+                needsAssistance?: boolean;
+                assistanceNotes?: string | null;
+              }>;
             }): Promise<{ count: number }>;
           };
         };

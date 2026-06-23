@@ -12,7 +12,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "predev": "npm run db:generate",
-    "prebuild": "npm run db:generate"
+    "prebuild": "npm run db:generate",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.6.0",

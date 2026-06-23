@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import type { Prisma } from "@prisma/client";
 import { companySchema, updateCompanySchema } from "../models/schemas.js";
 import {
   parseAuthUser,
@@ -6,6 +7,7 @@ import {
   resolveListCompanyId,
 } from "../lib/auth.js";
 import { getPrismaClient } from "../lib/prisma.js";
+import { toNumberValue } from "../lib/toNumberValue.js";
 function sendSuccess<T>(
   res: Response,
   data: T,
@@ -51,12 +53,45 @@ export async function getAllCompanies(req: Request, res: Response) {
     req.query.companyId as string | undefined
   );
 
+  const where: Prisma.TransportCompanyWhereInput = {};
+  if (companyId) where.id = companyId;
+  if (req.query.isActive === "true") where.isActive = true;
+
   const companies = await client.transportCompany.findMany({
-    where: companyId ? { id: companyId } : undefined,
+    where: Object.keys(where).length > 0 ? where : undefined,
     include: { _count: { select: { buses: true, routes: true } } },
     orderBy: { name: "asc" },
   });
   return sendSuccess(res, companies);
+}
+
+export async function getCompanyById(req: Request, res: Response) {
+  const client = getPrismaClient();
+  if (!client) {
+    return res.status(500).json({
+      error: {
+        code: "CONFIG_ERROR",
+        message: "DATABASE_URL is required to start the backend API.",
+      },
+    });
+  }
+
+  const id = String(req.params.id);
+  const company = await client.transportCompany.findUnique({
+    where: { id, isActive: true },
+    include: {
+      routes: {
+        include: { _count: { select: { schedules: true } } },
+        orderBy: { departure: "asc" },
+      },
+    },
+  });
+
+  if (!company) {
+    return sendError(res, 404, "COMPANY_NOT_FOUND", "Société introuvable");
+  }
+
+  return sendSuccess(res, toNumberValue(company));
 }
 
 export async function createCompany(req: Request, res: Response) {

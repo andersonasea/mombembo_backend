@@ -540,3 +540,31 @@ export async function getBookingsTrend(req: Request, res: Response) {
     return sendError(res, 500, "ANALYTICS_ERROR", "Impossible de charger les tendances");
   }
 }
+
+export async function getDashboardStats(req: Request, res: Response) {
+  const user = requireAdminAccess(req, res);
+  if (!user) return;
+
+  const client = getPrismaClient();
+  if (!client) {
+    return sendError(res, 500, "CONFIG_ERROR", "DATABASE_URL manquante");
+  }
+
+  const companyId = isCompanyAdmin(user) ? user.companyId : null;
+  const companyFilter = companyId ? { companyId } : undefined;
+  const bookingFilter = companyId
+    ? { status: "CONFIRMED" as const, schedule: { route: { companyId } } }
+    : { status: "CONFIRMED" as const };
+
+  const [companies, buses, routes, users, bookings] = await Promise.all([
+    companyId
+      ? client.transportCompany.count({ where: { id: companyId } })
+      : client.transportCompany.count(),
+    client.bus.count({ where: companyFilter }),
+    client.route.count({ where: companyFilter }),
+    companyId ? Promise.resolve(0) : client.user.count({ where: { role: "CLIENT" } }),
+    client.booking.count({ where: bookingFilter }),
+  ]);
+
+  return sendSuccess(res, { companies, buses, routes, users, bookings });
+}

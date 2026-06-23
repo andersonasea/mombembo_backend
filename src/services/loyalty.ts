@@ -1,4 +1,7 @@
-import type { LoyaltyTier, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+
+export type LoyaltyTier = "BRONZE" | "SILVER" | "GOLD";
+export type LoyaltyTxType = "EARN" | "REDEEM" | "BONUS" | "ADJUST";
 
 export const LOYALTY_TIER_THRESHOLDS: Record<LoyaltyTier, number> = {
   BRONZE: 0,
@@ -18,6 +21,88 @@ export const LOYALTY_REWARDS = [
 ] as const;
 
 const TIER_ORDER: LoyaltyTier[] = ["BRONZE", "SILVER", "GOLD"];
+
+/** Client DB minimal pour la fidélité — indépendant du cache TS du Prisma Client. */
+export type LoyaltyDbClient = {
+  loyaltyTransaction: {
+    findUnique(args: {
+      where: { bookingId: string };
+      select: { id: true };
+    }): Promise<{ id: string } | null>;
+    create(args: {
+      data: {
+        userId: string;
+        bookingId?: string;
+        type: LoyaltyTxType;
+        points: number;
+        balanceAfter: number;
+        description: string;
+      };
+    }): Promise<unknown>;
+    findMany(args: {
+      where: { userId: string };
+      orderBy: { createdAt: "desc" };
+      take: number;
+      select: {
+        id: true;
+        type: true;
+        points: true;
+        balanceAfter: true;
+        description: true;
+        createdAt: true;
+      };
+    }): Promise<
+      Array<{
+        id: string;
+        type: LoyaltyTxType;
+        points: number;
+        balanceAfter: number;
+        description: string;
+        createdAt: Date;
+      }>
+    >;
+  };
+  booking: {
+    findUnique(args: {
+      where: { id: string };
+      select: {
+        id: true;
+        userId: true;
+        seatsBooked: true;
+        totalPrice: true;
+        schedule: {
+          select: {
+            route: { select: { departure: true; destination: true } };
+          };
+        };
+      };
+    }): Promise<{
+      id: string;
+      userId: string;
+      seatsBooked: number;
+      totalPrice: Prisma.Decimal;
+      schedule: { route: { departure: string; destination: string } };
+    } | null>;
+    aggregate(args: {
+      where: { userId: string; status: "CONFIRMED" };
+      _count: { id: true };
+      _sum: { totalPrice: true };
+    }): Promise<{
+      _count: { id: number };
+      _sum: { totalPrice: Prisma.Decimal | null };
+    }>;
+  };
+  user: {
+    findUnique(args: {
+      where: { id: string };
+      select: { loyaltyPoints: true; loyaltyTier: true };
+    }): Promise<{ loyaltyPoints: number; loyaltyTier: LoyaltyTier } | null>;
+    update(args: {
+      where: { id: string };
+      data: { loyaltyPoints: number; loyaltyTier: LoyaltyTier };
+    }): Promise<unknown>;
+  };
+};
 
 export function computeEarnedPoints(totalPriceCdf: number, seatsBooked: number) {
   const base = 50;
@@ -61,16 +146,19 @@ export function buildCalculator(points: number, confirmedTrips: number) {
   };
 }
 
-type TxClient = Prisma.TransactionClient;
+export async function awardLoyaltyForBooking(
+  tx: Prisma.TransactionClient,
+  bookingId: string
+) {
+  const db = tx as unknown as LoyaltyDbClient;
 
-export async function awardLoyaltyForBooking(tx: TxClient, bookingId: string) {
-  const existing = await tx.loyaltyTransaction.findUnique({
+  const existing = await db.loyaltyTransaction.findUnique({
     where: { bookingId },
     select: { id: true },
   });
   if (existing) return;
 
-  const booking = await tx.booking.findUnique({
+  const booking = await db.booking.findUnique({
     where: { id: bookingId },
     select: {
       id: true,
@@ -89,7 +177,7 @@ export async function awardLoyaltyForBooking(tx: TxClient, bookingId: string) {
   const earned = computeEarnedPoints(Number(booking.totalPrice), booking.seatsBooked);
   const routeLabel = `${booking.schedule.route.departure} → ${booking.schedule.route.destination}`;
 
-  const user = await tx.user.findUnique({
+  const user = await db.user.findUnique({
     where: { id: booking.userId },
     select: { loyaltyPoints: true, loyaltyTier: true },
   });
@@ -97,7 +185,7 @@ export async function awardLoyaltyForBooking(tx: TxClient, bookingId: string) {
 
   let balance = user.loyaltyPoints + earned;
 
-  await tx.loyaltyTransaction.create({
+  await db.loyaltyTransaction.create({
     data: {
       userId: booking.userId,
       bookingId: booking.id,
@@ -113,7 +201,7 @@ export async function awardLoyaltyForBooking(tx: TxClient, bookingId: string) {
     const bonus = LOYALTY_TIER_BONUSES[newTier] ?? 0;
     if (bonus > 0) {
       balance += bonus;
-      await tx.loyaltyTransaction.create({
+      await db.loyaltyTransaction.create({
         data: {
           userId: booking.userId,
           type: "BONUS",
@@ -125,16 +213,13 @@ export async function awardLoyaltyForBooking(tx: TxClient, bookingId: string) {
     }
   }
 
-  await tx.user.update({
+  await db.user.update({
     where: { id: booking.userId },
     data: { loyaltyPoints: balance, loyaltyTier: newTier },
   });
 }
 
-export async function getLoyaltySummary(
-  client: { user: TxClient["user"]; booking: TxClient["booking"]; loyaltyTransaction: TxClient["loyaltyTransaction"] },
-  userId: string
-) {
+export async function getLoyaltySummary(client: LoyaltyDbClient, userId: string) {
   const user = await client.user.findUnique({
     where: { id: userId },
     select: { loyaltyPoints: true, loyaltyTier: true },
