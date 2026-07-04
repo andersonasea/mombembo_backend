@@ -188,6 +188,20 @@ export const bookingsTrendQuerySchema = z.object({
   routeId: z.string().min(1).optional(),
 });
 
+export const usersTrendQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  granularity: z.enum(["day", "week", "month", "year"]).optional().default("month"),
+});
+
+export const adminUsersQuerySchema = z.object({
+  search: z.string().max(120).optional(),
+  role: z.enum(["CLIENT", "ADMIN", "COMPANY_ADMIN", "ALL"]).optional().default("CLIENT"),
+  active: z.enum(["true", "false", "all"]).optional().default("all"),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+});
+
 export const tripSearchQuerySchema = z.object({
   departure: z.string().min(2),
   destination: z.string().min(2),

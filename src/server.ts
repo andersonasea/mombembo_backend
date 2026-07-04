@@ -24,6 +24,7 @@ import BusSchedule from "./routes/busSchedule.js"
 import BusBooking from "./routes/busBookings.js"
 import UserRoutes from "./routes/userRoutes.js"
 import AdminAnalyticsRoutes from "./routes/adminAnalyticsRoutes.js"
+import AdminUsersRoutes from "./routes/adminUsersRoutes.js"
 import CompanyAdminsRoutes from "./routes/companyAdminsRoutes.js"
 import SearchRoutes from "./routes/searchRoutes.js"
 import { registerSwagger } from "./swagger.js";
@@ -272,6 +273,7 @@ app.use("/api/search", SearchRoutes)
 app.use("/api/bookings", BusBooking)
 app.use("/api/users", requireAuth, UserRoutes)
 app.use("/api/admin/analytics", AdminAnalyticsRoutes)
+app.use("/api/admin/users", AdminUsersRoutes)
 app.use("/api/admin/company-admins", CompanyAdminsRoutes)
 
 app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {

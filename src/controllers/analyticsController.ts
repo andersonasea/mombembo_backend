@@ -1,10 +1,11 @@
 import type { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
-import { bookingsTrendQuerySchema } from "../models/schemas.js";
+import { bookingsTrendQuerySchema, usersTrendQuerySchema } from "../models/schemas.js";
 import { getPrismaClient } from "../lib/prisma.js";
-import { isCompanyAdmin, requireAdminAccess } from "../lib/auth.js";
+import { isCompanyAdmin, requireAdminAccess, requirePlatformAdmin } from "../lib/auth.js";
 
 type Granularity = "day" | "week" | "month";
+type UserGranularity = "day" | "week" | "month" | "year";
 
 type TrendRow = {
   bucket: Date;
@@ -567,4 +568,159 @@ export async function getDashboardStats(req: Request, res: Response) {
   ]);
 
   return sendSuccess(res, { companies, buses, routes, users, bookings });
+}
+
+function alignUserBucketStart(d: Date, granularity: UserGranularity): Date {
+  const aligned = alignBucketStart(d, granularity === "year" ? "month" : granularity);
+  if (granularity === "year") {
+    aligned.setUTCMonth(0, 1);
+  }
+  return aligned;
+}
+
+function addToUserBucket(d: Date, granularity: UserGranularity, amount: number): Date {
+  const next = new Date(d);
+  if (granularity === "year") {
+    next.setUTCFullYear(next.getUTCFullYear() + amount);
+    return next;
+  }
+  return addToBucket(d, granularity, amount);
+}
+
+function userBucketKey(d: Date, granularity: UserGranularity): string {
+  if (granularity === "year") return String(d.getUTCFullYear());
+  return bucketKey(d, granularity);
+}
+
+function formatUserBucketLabel(d: Date, granularity: UserGranularity): string {
+  if (granularity === "year") {
+    return d.toLocaleDateString("fr-FR", { year: "numeric", timeZone: "UTC" });
+  }
+  return formatBucketLabel(d, granularity);
+}
+
+function fillUserTrendPoints(
+  from: Date,
+  to: Date,
+  granularity: UserGranularity,
+  rows: { bucket: Date; count: number }[]
+) {
+  const map = new Map(rows.map((row) => [userBucketKey(row.bucket, granularity), row]));
+  const points: { date: string; label: string; count: number; cumulative: number }[] = [];
+  let cursor = alignUserBucketStart(from, granularity);
+  const end = alignUserBucketStart(to, granularity);
+  let cumulative = 0;
+
+  while (cursor <= end) {
+    const key = userBucketKey(cursor, granularity);
+    const row = map.get(key);
+    const count = row?.count ?? 0;
+    cumulative += count;
+    points.push({
+      date: key,
+      label: formatUserBucketLabel(cursor, granularity),
+      count,
+      cumulative,
+    });
+    cursor = addToUserBucket(cursor, granularity, 1);
+  }
+
+  return points;
+}
+
+async function queryUserRegistrations(
+  from: Date,
+  toExclusive: Date,
+  granularity: UserGranularity
+): Promise<{ bucket: Date; count: number }[]> {
+  const client = getPrismaClient();
+  if (!client) return [];
+
+  const truncExpr =
+    granularity === "day"
+      ? Prisma.sql`DATE(u."createdAt")`
+      : granularity === "week"
+        ? Prisma.sql`date_trunc('week', u."createdAt")::date`
+        : granularity === "month"
+          ? Prisma.sql`date_trunc('month', u."createdAt")::date`
+          : Prisma.sql`date_trunc('year', u."createdAt")::date`;
+
+  const rows = await client.$queryRaw<{ bucket: Date; count: bigint }[]>`
+    SELECT ${truncExpr} AS bucket,
+           COUNT(*)::bigint AS count
+    FROM users u
+    WHERE u."createdAt" >= ${from}
+      AND u."createdAt" < ${toExclusive}
+      AND u.role = 'CLIENT'
+    GROUP BY bucket
+    ORDER BY bucket ASC
+  `;
+
+  return rows.map((row) => ({
+    bucket: new Date(row.bucket),
+    count: Number(row.count),
+  }));
+}
+
+export async function getUsersTrend(req: Request, res: Response) {
+  const admin = requirePlatformAdmin(req, res);
+  if (!admin) return;
+
+  const parsed = usersTrendQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return sendError(res, 400, "VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Paramètres invalides");
+  }
+
+  const client = getPrismaClient();
+  if (!client) {
+    return sendError(res, 500, "CONFIG_ERROR", "DATABASE_URL manquante");
+  }
+
+  const { granularity } = parsed.data;
+  const toDate = parsed.data.to ? parseDateOnly(parsed.data.to) : parseDateOnly(formatDateOnly(new Date()));
+  const fromDate = parsed.data.from
+    ? parseDateOnly(parsed.data.from)
+    : granularity === "year"
+      ? addToUserBucket(toDate, "year", -4)
+      : granularity === "month"
+        ? addToBucket(toDate, "month", -11)
+        : granularity === "week"
+          ? addToBucket(toDate, "week", -11)
+          : addToBucket(toDate, "day", -29);
+
+  if (fromDate > toDate) {
+    return sendError(res, 400, "VALIDATION_ERROR", "La date de début doit précéder la date de fin");
+  }
+
+  const toExclusive = addToBucket(toDate, "day", 1);
+  const periodMs = toExclusive.getTime() - fromDate.getTime();
+  const previousFrom = new Date(fromDate.getTime() - periodMs);
+
+  try {
+    const [currentRows, previousRows] = await Promise.all([
+      queryUserRegistrations(fromDate, toExclusive, granularity),
+      queryUserRegistrations(previousFrom, fromDate, granularity),
+    ]);
+
+    const points = fillUserTrendPoints(fromDate, toDate, granularity, currentRows);
+    const totalRegistrations = points.reduce((sum, point) => sum + point.count, 0);
+    const previousRegistrations = previousRows.reduce((sum, row) => sum + row.count, 0);
+
+    return sendSuccess(res, {
+      points,
+      summary: {
+        totalRegistrations,
+        previousPeriodRegistrations: previousRegistrations,
+        changePercent: percentChange(totalRegistrations, previousRegistrations),
+      },
+      meta: {
+        from: formatDateOnly(fromDate),
+        to: formatDateOnly(toDate),
+        granularity,
+      },
+    });
+  } catch (error) {
+    console.error("getUsersTrend failed", error);
+    return sendError(res, 500, "ANALYTICS_ERROR", "Impossible de charger les tendances d'inscription");
+  }
 }
