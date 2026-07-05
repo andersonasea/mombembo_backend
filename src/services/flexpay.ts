@@ -36,7 +36,7 @@ export function normalizeFlexpayPhoneNumber(phoneNumber: string): string {
 }
 
 function normalizeStatus(value: unknown): FlexpayPaymentStatus {
-  const normalized = String(value ?? "").toUpperCase();
+  const normalized = String(value ?? "").toUpperCase().replace(/\s+/g, "_");
   if (["SUCCESS", "SUCCEEDED", "PAID", "COMPLETED", "APPROVED"].includes(normalized)) {
     return "SUCCESS";
   }
@@ -44,6 +44,54 @@ function normalizeStatus(value: unknown): FlexpayPaymentStatus {
     return "FAILED";
   }
   return "PENDING";
+}
+
+function isV1InitAcknowledgement(raw: Record<string, unknown>): boolean {
+  const status = String(raw.Status ?? "").toLowerCase();
+  const comment = String(raw.Comment ?? "").toLowerCase();
+  const transStatus = String(raw.Trans_Status ?? raw.trans_status ?? "").toLowerCase();
+
+  if (
+    status === "success" &&
+    (comment.includes("received") ||
+      comment.includes("reçu") ||
+      comment.includes("recu") ||
+      comment.includes("transaction received"))
+  ) {
+    return true;
+  }
+
+  // FlexPay v1: Status "Success" means the request was accepted, not that M-Pesa paid.
+  if (status === "success" && ["submitted", "pending", "processing", "in_progress", ""].includes(transStatus)) {
+    return true;
+  }
+
+  return false;
+}
+
+function parseProviderStatus(raw: Record<string, unknown>): FlexpayPaymentStatus {
+  if (isV1InitAcknowledgement(raw)) {
+    return "PENDING";
+  }
+
+  const transStatusRaw = raw.Trans_Status ?? raw.trans_status;
+  if (transStatusRaw != null && String(transStatusRaw).trim() !== "") {
+    return normalizeStatus(transStatusRaw);
+  }
+
+  const transaction = asRecord(raw.transaction);
+  const fromCode =
+    normalizeProviderCode(transaction.code) ??
+    normalizeProviderCode(transaction.status) ??
+    normalizeProviderCode(raw.transactionCode) ??
+    normalizeProviderCode(raw.resultCode) ??
+    normalizeProviderCode(raw.code);
+
+  if (fromCode) return fromCode;
+
+  return normalizeStatus(
+    raw.status ?? raw.paymentStatus ?? raw.Payment_Status ?? raw.state ?? transaction.status ?? transaction.state
+  );
 }
 
 function normalizeProviderCode(value: unknown): FlexpayPaymentStatus | null {
@@ -162,7 +210,11 @@ function parseInitResponse(
     }
   }
 
-  const explicitStatus = normalizeStatus(raw.status ?? raw.paymentStatus ?? raw.Status);
+  if (isV1InitAcknowledgement(raw)) {
+    return { providerReference, status: "PENDING", raw };
+  }
+
+  const explicitStatus = parseProviderStatus(raw);
   const initAccepted =
     normalizeProviderCode(raw.code) === "SUCCESS" &&
     explicitStatus === "PENDING" &&
@@ -212,27 +264,7 @@ export function extractFlexpayReferences(payload: Record<string, unknown>): stri
 }
 
 export function resolveFlexpayWebhookStatus(payload: Record<string, unknown>): FlexpayPaymentStatus {
-  const transaction = asRecord(payload.transaction);
-  const transStatus = normalizeStatus(payload.Trans_Status ?? payload.trans_status);
-  if (transStatus !== "PENDING") return transStatus;
-
-  const fromCode =
-    normalizeProviderCode(payload.code) ??
-    normalizeProviderCode(payload.resultCode) ??
-    normalizeProviderCode(payload.transactionCode) ??
-    normalizeProviderCode(transaction.code) ??
-    normalizeProviderCode(transaction.status);
-
-  if (fromCode) return fromCode;
-
-  return normalizeStatus(
-    payload.status ??
-      payload.Status ??
-      payload.state ??
-      payload.result ??
-      transaction.status ??
-      transaction.state
-  );
+  return parseProviderStatus(payload);
 }
 
 export async function initiateFlexpayPayment(
@@ -299,47 +331,62 @@ export async function checkFlexpayPaymentStatus(
     return { status: "PENDING", raw: null };
   }
 
+  const baseUrl = process.env.FLEXPAY_BASE_URL ?? "";
+  const merchantId = process.env.FLEXPAY_MERCHANT_ID;
+  const merchantSecret = process.env.FLEXPAY_MERCHANT_SECRET;
+  const v5 = isV5Api(baseUrl);
   const checkUrl = resolveCheckUrl(reference);
+  const usesV1Verify = !v5 && baseUrl.includes("/gateway") && Boolean(merchantId && merchantSecret);
   const flexpayTimeoutMs = Number(process.env.FLEXPAY_REQUEST_TIMEOUT_MS ?? 30000);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), flexpayTimeoutMs);
 
   try {
-    const response = await fetch(checkUrl, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-      signal: controller.signal,
-    });
+    const response = usesV1Verify
+      ? await fetch(baseUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            merchant_id: merchantId,
+            merchant_secrete: merchantSecret,
+            action: "verify",
+            reference,
+          }),
+          signal: controller.signal,
+        })
+      : await fetch(checkUrl, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+          signal: controller.signal,
+        });
+
     const contentType = response.headers.get("content-type") ?? "";
     const raw = contentType.includes("application/json")
       ? ((await response.json().catch(() => ({}))) as Record<string, unknown>)
       : ({ message: await response.text().catch(() => "") } as Record<string, unknown>);
 
     if (!response.ok) {
+      console.warn("FlexPay status check returned non-OK", {
+        reference,
+        endpoint: usesV1Verify ? baseUrl : checkUrl,
+        status: response.status,
+        raw,
+      });
       return { status: "PENDING", raw };
     }
 
-    const transStatus = normalizeStatus(raw.Trans_Status ?? raw.trans_status);
-    if (transStatus !== "PENDING") {
-      return { status: transStatus, raw };
-    }
-
-    const transaction = asRecord(raw.transaction);
-    const fromCode =
-      normalizeProviderCode(transaction.code) ??
-      normalizeProviderCode(transaction.status) ??
-      normalizeProviderCode(raw.transactionCode) ??
-      normalizeProviderCode(raw.resultCode) ??
-      normalizeProviderCode(raw.code);
-
-    const status = fromCode ?? normalizeStatus(raw.status ?? raw.Status ?? transaction.status ?? transaction.state);
+    const status = parseProviderStatus(raw);
+    console.log("FlexPay status check", { reference, status, raw });
     return { status, raw };
   } catch (error) {
     console.warn("FlexPay status check failed", {
       reference,
-      checkUrl,
+      endpoint: usesV1Verify ? baseUrl : checkUrl,
       error: error instanceof Error ? error.message : error,
     });
     return { status: "PENDING", raw: null };
