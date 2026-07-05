@@ -26,7 +26,14 @@ export async function finalizeSuccessfulPayment(
         where: { id: freshBooking.scheduleId },
         data: { availableSeats: { decrement: freshBooking.seatsBooked } },
       });
-      await awardLoyaltyForBooking(tx, bookingId);
+      try {
+        await awardLoyaltyForBooking(tx, bookingId);
+      } catch (error) {
+        console.warn("Loyalty award skipped after payment success", {
+          bookingId,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
     }
   });
 }

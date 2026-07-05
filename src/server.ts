@@ -415,49 +415,59 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
 });
 
 app.post("/api/payments/webhook/flexpay", async (req, res) => {
-  const payload = asRecord(req.body);
-  console.log("FlexPay webhook received", JSON.stringify(payload));
+  try {
+    const payload = asRecord(req.body);
+    console.log("FlexPay webhook received", JSON.stringify(payload));
 
-  if (!validateFlexpayWebhookSecret(req.headers as Record<string, unknown>)) {
-    return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook Flexpay non autorisé");
-  }
+    if (!validateFlexpayWebhookSecret(req.headers as Record<string, unknown>)) {
+      return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook Flexpay non autorisé");
+    }
 
-  const references = extractFlexpayReferences(payload);
-  if (references.length === 0) {
-    return sendError(res, 400, "INVALID_PAYLOAD", "Référence de transaction manquante");
-  }
+    const references = extractFlexpayReferences(payload);
+    if (references.length === 0) {
+      return sendError(res, 400, "INVALID_PAYLOAD", "Référence de transaction manquante");
+    }
 
-  const providerStatus = resolveFlexpayWebhookStatus(payload);
-  const isSuccess = providerStatus === "SUCCESS";
-  const status = isSuccess ? "SUCCESS" : providerStatus === "FAILED" ? "FAILED" : "PENDING";
+    const providerStatus = resolveFlexpayWebhookStatus(payload);
+    const isSuccess = providerStatus === "SUCCESS";
+    const status = isSuccess ? "SUCCESS" : providerStatus === "FAILED" ? "FAILED" : "PENDING";
 
-  const payment = await prisma.payment.findFirst({
-    where: { transactionRef: { in: references } },
-    include: { booking: true },
-  });
-
-  if (!payment) {
-    console.warn("FlexPay webhook: payment not found for references", references);
-    return sendError(res, 404, "PAYMENT_NOT_FOUND", "Paiement introuvable");
-  }
-
-  if (status === "PENDING") {
-    return sendSuccess(res, { received: true, ignored: true });
-  }
-
-  if (isSuccess) {
-    await finalizeSuccessfulPayment(prisma, payment.id, payment.bookingId);
-  } else {
-    await prisma.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { status: "FAILED" },
-      });
-      await releaseSeatSelectionsForBooking(tx, payment.bookingId);
+    const payment = await prisma.payment.findFirst({
+      where: { transactionRef: { in: references } },
+      include: { booking: true },
     });
-  }
 
-  return sendSuccess(res, { received: true });
+    if (!payment) {
+      console.warn("FlexPay webhook: payment not found for references", references);
+      return sendError(res, 404, "PAYMENT_NOT_FOUND", "Paiement introuvable");
+    }
+
+    if (status === "PENDING") {
+      return sendSuccess(res, { received: true, ignored: true, providerStatus });
+    }
+
+    if (isSuccess) {
+      await finalizeSuccessfulPayment(prisma, payment.id, payment.bookingId);
+    } else {
+      await prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        });
+        await releaseSeatSelectionsForBooking(tx, payment.bookingId);
+      });
+    }
+
+    return sendSuccess(res, { received: true, providerStatus });
+  } catch (error) {
+    console.error("FlexPay webhook failed", error);
+    return sendError(
+      res,
+      500,
+      "WEBHOOK_PROCESSING_FAILED",
+      error instanceof Error ? error.message : "Erreur webhook FlexPay"
+    );
+  }
 });
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
