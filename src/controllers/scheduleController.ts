@@ -9,6 +9,7 @@ import {
   resolveListCompanyId,
 } from "../lib/auth.js"
 import { getPrismaClient } from "../lib/prisma.js"
+import { activeSeatHoldWhere } from "../services/seat-release.js"
 function sendSuccess<T>(
     res: Response,
     data: T,
@@ -106,7 +107,7 @@ export async function getAllSchedulesbyId(req: Request, res: Response) {
                 route: { include: { company: { select: { id: true, name: true } } } },
                 bus: { select: { plateNumber: true, model: true, totalSeats: true } },
                 seatSelections: {
-                    where: { booking: { status: "CONFIRMED" } },
+                    where: { booking: activeSeatHoldWhere() },
                     select: { seatNumber: true },
                 },
             } as Prisma.ScheduleInclude,

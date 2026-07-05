@@ -17,6 +17,10 @@ import {
   validateFlexpayWebhookSecret,
 } from "./services/flexpay.js";
 import { finalizeSuccessfulPayment } from "./services/payment-sync.js";
+import {
+  getPendingBookingExpiryDate,
+  releaseSeatSelectionsForBooking,
+} from "./services/seat-release.js";
 import CompanyRoutes from "./routes/companyRoutes.js";
 import BusRoutes from "./routes/busRoutes.js"
 import BusDestination from "./routes/busDestination.js"
@@ -44,7 +48,6 @@ const prisma = new PrismaClient({
 
 const PORT = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
 const JWT_SECRET = process.env.JWT_SECRET ?? "change-me";
-const BOOKING_PENDING_TTL_MINUTES = Number(process.env.BOOKING_PENDING_TTL_MINUTES ?? 10);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
 const PUBLIC_API_BASE_URL = process.env.PUBLIC_API_BASE_URL ?? `http://localhost:${PORT}`;
 const FLEXPAY_CALLBACK_URL = resolveFlexpayCallbackUrl(PUBLIC_API_BASE_URL);
@@ -293,11 +296,14 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
   if (booking.userId !== req.user.id) return sendError(res, 403, "FORBIDDEN", "Accès non autorisé");
   if (
     booking.status === "PENDING" &&
-    booking.createdAt < new Date(Date.now() - BOOKING_PENDING_TTL_MINUTES * 60 * 1000)
+    booking.createdAt < getPendingBookingExpiryDate()
   ) {
-    await prisma.booking.update({
-      where: { id: booking.id },
-      data: { status: "CANCELLED" },
+    await prisma.$transaction(async (tx) => {
+      await tx.booking.update({
+        where: { id: booking.id },
+        data: { status: "CANCELLED" },
+      });
+      await releaseSeatSelectionsForBooking(tx, booking.id);
     });
     return sendError(
       res,
@@ -380,9 +386,12 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       201
     );
   } catch (error) {
-    await prisma.payment.update({
-      where: { id: createdPayment.id },
-      data: { status: "FAILED" },
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: createdPayment.id },
+        data: { status: "FAILED" },
+      });
+      await releaseSeatSelectionsForBooking(tx, bookingId);
     });
     if (error instanceof Error && error.message.startsWith("FLEXPAY_INIT_FAILED:")) {
       const prefix = "FLEXPAY_INIT_FAILED:";
@@ -442,9 +451,12 @@ app.post("/api/payments/webhook/flexpay", async (req, res) => {
   if (isSuccess) {
     await finalizeSuccessfulPayment(prisma, payment.id, payment.bookingId);
   } else {
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: "FAILED" },
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      await releaseSeatSelectionsForBooking(tx, payment.bookingId);
     });
   }
 

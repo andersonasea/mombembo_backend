@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { checkFlexpayPaymentStatus } from "./flexpay.js";
 import { awardLoyaltyForBooking } from "./loyalty.js";
-
+import { releaseSeatSelectionsForBooking } from "./seat-release.js";
 export async function finalizeSuccessfulPayment(
   client: PrismaClient,
   paymentId: string,
@@ -45,6 +45,10 @@ export async function syncPaymentWithProvider(
     await finalizeSuccessfulPayment(client, payment.id, booking.id);
     return true;
   }
+  if (payment.status === "FAILED") {
+    await releaseSeatSelectionsForBooking(client, booking.id);
+    return false;
+  }
   if (payment.status !== "PENDING" || !payment.transactionRef) {
     return payment.status === "SUCCESS" && booking.status === "CONFIRMED";
   }
@@ -55,9 +59,12 @@ export async function syncPaymentWithProvider(
     return true;
   }
   if (providerStatus.status === "FAILED") {
-    await client.payment.update({
-      where: { id: payment.id },
-      data: { status: "FAILED" },
+    await client.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      await releaseSeatSelectionsForBooking(tx, booking.id);
     });
   }
   return false;

@@ -11,6 +11,11 @@ import {
 } from "../lib/auth.js"
 import { getPrismaClient } from "../lib/prisma.js"
 import { syncPaymentWithProvider } from "../services/payment-sync.js"
+import {
+  activeSeatHoldWhere,
+  getPendingBookingExpiryDate,
+  releaseOrphanedSeatSelectionsForSchedule,
+} from "../services/seat-release.js"
 
 function sendSuccess<T>(
     res: Response,
@@ -49,12 +54,6 @@ function requireAuthRequest(req: AuthRequest, res: Response): AuthUser | null {
   const user = requireAuth(req, res);
   if (user) req.user = user;
   return user;
-}
-
-// gets the pending booking expiry date
-const BOOKING_PENDING_TTL_MINUTES = Number(process.env.BOOKING_PENDING_TTL_MINUTES ?? 10);
-function getPendingBookingExpiryDate() {
-  return new Date(Date.now() - BOOKING_PENDING_TTL_MINUTES * 60 * 1000);
 }
 
 /** Select passager — cast pour compatibilité si le client Prisma IDE est stale. */
@@ -152,6 +151,8 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
   }
 
     const id = String(req.params.id);
+    
+    // sync payment with provider
     await syncPaymentWithProvider(client, id);
     const booking = await loadBookingDetail(client, id);
   
@@ -218,20 +219,25 @@ export async function createBooking(req:AuthRequest,res:Response){
     }
   
     try {
+      const pendingExpiryDate = getPendingBookingExpiryDate();
       const result = await client.$transaction(async (tx) => {
         await tx.booking.updateMany({
           where: {
             scheduleId,
             status: "PENDING",
-            createdAt: { lt: getPendingBookingExpiryDate() },
+            createdAt: { lt: pendingExpiryDate },
           },
           data: { status: "CANCELLED" },
         });
+        await releaseOrphanedSeatSelectionsForSchedule(tx, scheduleId, pendingExpiryDate);
 
         const txWithSeatSelection = tx as typeof tx & {
           seatSelection: {
             findMany(args: {
-              where: { scheduleId: string; booking: { status: "CONFIRMED" } };
+              where: {
+                scheduleId: string;
+                booking: ReturnType<typeof activeSeatHoldWhere>;
+              };
               select: { seatNumber: true };
             }): Promise<Array<{ seatNumber: number }>>;
             createMany(args: {
@@ -251,7 +257,7 @@ export async function createBooking(req:AuthRequest,res:Response){
         const taken = await txWithSeatSelection.seatSelection.findMany({
           where: {
             scheduleId,
-            booking: { status: "CONFIRMED" },
+            booking: activeSeatHoldWhere(pendingExpiryDate),
           },
           select: { seatNumber: true },
         });
