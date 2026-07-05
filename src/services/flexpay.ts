@@ -37,16 +37,55 @@ export function normalizeFlexpayPhoneNumber(phoneNumber: string): string {
 
 function normalizeStatus(value: unknown): FlexpayPaymentStatus {
   const normalized = String(value ?? "").toUpperCase().replace(/\s+/g, "_");
-  if (["SUCCESS", "SUCCEEDED", "PAID", "COMPLETED", "APPROVED"].includes(normalized)) {
+  if (
+    ["SUCCESS", "SUCCEEDED", "SUCCESSFUL", "PAID", "COMPLETED", "APPROVED", "OK", "DONE"].includes(
+      normalized
+    ) ||
+    (normalized.includes("SUCCESS") && !normalized.includes("UNSUCCESS"))
+  ) {
     return "SUCCESS";
   }
-  if (["FAILED", "FAIL", "CANCELLED", "CANCELED", "REJECTED", "ERROR", "DECLINED"].includes(normalized)) {
+  if (
+    ["FAILED", "FAIL", "CANCELLED", "CANCELED", "REJECTED", "ERROR", "DECLINED"].includes(
+      normalized
+    ) ||
+    normalized.includes("FAIL")
+  ) {
     return "FAILED";
+  }
+  if (
+    ["SUBMITTED", "PENDING", "PROCESSING", "IN_PROGRESS", "INITIATED", "QUEUED", "WAITING"].includes(
+      normalized
+    )
+  ) {
+    return "PENDING";
   }
   return "PENDING";
 }
 
+function resolveTransStatus(value: unknown): FlexpayPaymentStatus | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const normalized = normalizeStatus(text);
+  const upper = text.toUpperCase().replace(/\s+/g, "_");
+  if (normalized === "SUCCESS" || normalized === "FAILED") return normalized;
+  if (
+    ["SUBMITTED", "PENDING", "PROCESSING", "IN_PROGRESS", "INITIATED", "QUEUED", "WAITING"].includes(
+      upper
+    )
+  ) {
+    return "PENDING";
+  }
+  return null;
+}
+
 function isV1InitAcknowledgement(raw: Record<string, unknown>): boolean {
+  const transStatusRaw = raw.Trans_Status ?? raw.trans_status;
+  if (transStatusRaw != null && String(transStatusRaw).trim() !== "") {
+    const resolved = resolveTransStatus(transStatusRaw);
+    if (resolved === "SUCCESS" || resolved === "FAILED") return false;
+  }
+
   const status = String(raw.Status ?? "").toLowerCase();
   const comment = String(raw.Comment ?? "").toLowerCase();
   const transStatus = String(raw.Trans_Status ?? raw.trans_status ?? "").toLowerCase();
@@ -61,8 +100,10 @@ function isV1InitAcknowledgement(raw: Record<string, unknown>): boolean {
     return true;
   }
 
-  // FlexPay v1: Status "Success" means the request was accepted, not that M-Pesa paid.
-  if (status === "success" && ["submitted", "pending", "processing", "in_progress", ""].includes(transStatus)) {
+  if (
+    status === "success" &&
+    ["submitted", "pending", "processing", "in_progress"].includes(transStatus)
+  ) {
     return true;
   }
 
@@ -70,16 +111,26 @@ function isV1InitAcknowledgement(raw: Record<string, unknown>): boolean {
 }
 
 function parseProviderStatus(raw: Record<string, unknown>): FlexpayPaymentStatus {
-  if (isV1InitAcknowledgement(raw)) {
-    return "PENDING";
-  }
-
   const transStatusRaw = raw.Trans_Status ?? raw.trans_status;
   if (transStatusRaw != null && String(transStatusRaw).trim() !== "") {
-    return normalizeStatus(transStatusRaw);
+    const resolved = resolveTransStatus(transStatusRaw);
+    if (resolved === "SUCCESS" || resolved === "FAILED") return resolved;
   }
 
   const transaction = asRecord(raw.transaction);
+  for (const field of [
+    transaction.Trans_Status,
+    transaction.trans_status,
+    transaction.status,
+    transaction.state,
+    raw.Payment_Status,
+    raw.payment_status,
+  ]) {
+    if (field == null || String(field).trim() === "") continue;
+    const resolved = resolveTransStatus(field);
+    if (resolved === "SUCCESS" || resolved === "FAILED") return resolved;
+  }
+
   const fromCode =
     normalizeProviderCode(transaction.code) ??
     normalizeProviderCode(transaction.status) ??
@@ -87,10 +138,14 @@ function parseProviderStatus(raw: Record<string, unknown>): FlexpayPaymentStatus
     normalizeProviderCode(raw.resultCode) ??
     normalizeProviderCode(raw.code);
 
-  if (fromCode) return fromCode;
+  if (fromCode === "SUCCESS" || fromCode === "FAILED") return fromCode;
+
+  if (isV1InitAcknowledgement(raw)) {
+    return "PENDING";
+  }
 
   return normalizeStatus(
-    raw.status ?? raw.paymentStatus ?? raw.Payment_Status ?? raw.state ?? transaction.status ?? transaction.state
+    raw.status ?? raw.paymentStatus ?? raw.Status ?? raw.state ?? transaction.status ?? transaction.state
   );
 }
 
@@ -214,19 +269,12 @@ function parseInitResponse(
     return { providerReference, status: "PENDING", raw };
   }
 
-  const explicitStatus = parseProviderStatus(raw);
-  const initAccepted =
-    normalizeProviderCode(raw.code) === "SUCCESS" &&
-    explicitStatus === "PENDING" &&
-    !raw.status &&
-    !raw.paymentStatus &&
-    !raw.Status;
+  if (parseProviderStatus(raw) === "FAILED") {
+    return { providerReference, status: "FAILED", raw };
+  }
 
-  return {
-    providerReference,
-    status: initAccepted ? "PENDING" : explicitStatus,
-    raw,
-  };
+  // Push payment: a successful init only sends the USSD prompt, not a completed debit.
+  return { providerReference, status: "PENDING", raw };
 }
 
 export function isFlexpayConfigured() {

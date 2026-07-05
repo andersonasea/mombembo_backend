@@ -367,21 +367,18 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       where: { id: createdPayment.id },
       data: {
         transactionRef: merchantReference,
-        status: flexpayResponse.status,
-        paidAt: flexpayResponse.status === "SUCCESS" ? new Date() : null,
+        status: "PENDING",
+        paidAt: null,
       },
     });
-
-    if (flexpayResponse.status === "SUCCESS") {
-      await finalizeSuccessfulPayment(prisma, createdPayment.id, bookingId);
-    }
 
     return sendSuccess(
       res,
       {
         ...toNumberValue(updatedPayment),
         provider: "FLEXPAY",
-        bookingStatus: flexpayResponse.status === "SUCCESS" ? "CONFIRMED" : "PENDING",
+        providerReference: flexpayResponse.providerReference,
+        bookingStatus: "PENDING",
       },
       201
     );

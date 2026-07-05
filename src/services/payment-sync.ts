@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { checkFlexpayPaymentStatus } from "./flexpay.js";
 import { awardLoyaltyForBooking } from "./loyalty.js";
 import { releaseSeatSelectionsForBooking } from "./seat-release.js";
+
 export async function finalizeSuccessfulPayment(
   client: PrismaClient,
   paymentId: string,
@@ -53,19 +54,31 @@ export async function syncPaymentWithProvider(
     return payment.status === "SUCCESS" && booking.status === "CONFIRMED";
   }
 
-  const providerStatus = await checkFlexpayPaymentStatus(payment.transactionRef);
-  if (providerStatus.status === "SUCCESS") {
-    await finalizeSuccessfulPayment(client, payment.id, booking.id);
-    return true;
-  }
-  if (providerStatus.status === "FAILED") {
-    await client.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { status: "FAILED" },
+  const references = Array.from(
+    new Set(
+      [payment.transactionRef]
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  for (const reference of references) {
+    const providerStatus = await checkFlexpayPaymentStatus(reference);
+    if (providerStatus.status === "SUCCESS") {
+      await finalizeSuccessfulPayment(client, payment.id, booking.id);
+      return true;
+    }
+    if (providerStatus.status === "FAILED") {
+      await client.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        });
+        await releaseSeatSelectionsForBooking(tx, booking.id);
       });
-      await releaseSeatSelectionsForBooking(tx, booking.id);
-    });
+      return false;
+    }
   }
+
   return false;
 }
