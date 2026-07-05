@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 type FlexpayPaymentMethod = "MPESA" | "AIRTEL_MONEY" | "ORANGE_MONEY" | "AFRI_MONEY";
 
 type FlexpayPaymentStatus = "PENDING" | "SUCCESS" | "FAILED";
@@ -444,6 +446,11 @@ export async function checkFlexpayPaymentStatus(
 }
 
 export function validateFlexpayWebhookSecret(headers: Headers | Record<string, unknown>) {
+  // Encrypted sandbox callbacks use HMAC (X-Signature) verified in parseFlexpayWebhookBody.
+  if (process.env.FLEXPAY_CALLBACK_HMAC_KEY?.trim()) {
+    return true;
+  }
+
   const expected = process.env.FLEXPAY_WEBHOOK_SECRET;
   if (!expected) return true;
 
@@ -451,15 +458,113 @@ export function validateFlexpayWebhookSecret(headers: Headers | Record<string, u
     headers instanceof Headers
       ? headers.get("x-flexpay-secret") ??
         headers.get("x-callback-secret") ??
-        headers.get("x-signature") ??
         headers.get("authorization")
       : String(
           (headers["x-flexpay-secret"] as string | undefined) ??
             (headers["x-callback-secret"] as string | undefined) ??
-            (headers["x-signature"] as string | undefined) ??
             (headers["authorization"] as string | undefined) ??
             ""
         );
 
   return headerValue === expected || headerValue === `Bearer ${expected}`;
+}
+
+function getHeaderValue(headers: Record<string, unknown>, name: string): string {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) {
+      return String(value ?? "").trim();
+    }
+  }
+  return "";
+}
+
+function toAes128Key(key: string): Buffer {
+  const trimmed = key.trim();
+  if (/^[0-9a-fA-F]{32}$/.test(trimmed)) {
+    return Buffer.from(trimmed, "hex");
+  }
+  const buf = Buffer.from(trimmed, "utf8");
+  if (buf.length === 16) return buf;
+  if (buf.length > 16) return buf.subarray(0, 16);
+  return Buffer.concat([buf, Buffer.alloc(16 - buf.length)]);
+}
+
+function secureCompare(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function verifyFlexpayWebhookHmac(message: string, signature: string, hmacKey: string): boolean {
+  const key = Buffer.from(hmacKey.trim(), "utf8");
+  const digestHex = crypto.createHmac("sha256", key).update(message, "utf8").digest("hex");
+  const digestBase64 = crypto.createHmac("sha256", key).update(message, "utf8").digest("base64");
+  const normalized = signature.trim();
+  return (
+    secureCompare(normalized, digestHex) ||
+    secureCompare(normalized, digestBase64) ||
+    secureCompare(normalized.toLowerCase(), digestHex.toLowerCase())
+  );
+}
+
+export function decryptFlexpayCallbackData(
+  encryptedBase64: string,
+  aesKeyRaw: string
+): Record<string, unknown> {
+  const key = toAes128Key(aesKeyRaw);
+  try {
+    const decipher = crypto.createDecipheriv("aes-128-cbc", key, key);
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encryptedBase64, "base64")),
+      decipher.final(),
+    ]);
+    const parsed = JSON.parse(decrypted.toString("utf8")) as unknown;
+    return asRecord(parsed);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`FLEXPAY_WEBHOOK_DECRYPT_FAILED:${reason}`);
+  }
+}
+
+export function parseFlexpayWebhookBody(
+  body: Record<string, unknown>,
+  headers: Record<string, unknown>
+): { payload: Record<string, unknown>; encrypted: boolean } {
+  const encryptedData = typeof body.data === "string" ? body.data.trim() : "";
+  if (!encryptedData) {
+    return { payload: body, encrypted: false };
+  }
+
+  const aesKey =
+    process.env.FLEXPAY_CALLBACK_AES_KEY?.trim() ??
+    process.env.FLEXPAY_MERCHANT_SECRET?.trim() ??
+    "";
+  const hmacKey =
+    process.env.FLEXPAY_CALLBACK_HMAC_KEY?.trim() ??
+    process.env.FLEXPAY_WEBHOOK_SECRET?.trim() ??
+    "";
+
+  if (!aesKey) {
+    throw new Error("FLEXPAY_CALLBACK_AES_KEY is required for encrypted webhooks");
+  }
+
+  const signature = getHeaderValue(headers, "x-signature");
+  if (signature) {
+    if (!hmacKey) {
+      throw new Error("FLEXPAY_CALLBACK_HMAC_KEY is required when X-Signature is present");
+    }
+    const hmacValid =
+      verifyFlexpayWebhookHmac(encryptedData, signature, hmacKey) ||
+      verifyFlexpayWebhookHmac(JSON.stringify(body), signature, hmacKey);
+    if (!hmacValid) {
+      throw new Error("FLEXPAY_WEBHOOK_HMAC_INVALID");
+    }
+  }
+
+  return {
+    payload: decryptFlexpayCallbackData(encryptedData, aesKey),
+    encrypted: true,
+  };
 }

@@ -12,6 +12,7 @@ import {
   extractFlexpayReferences,
   initiateFlexpayPayment,
   isFlexpayConfigured,
+  parseFlexpayWebhookBody,
   resolveFlexpayCallbackUrl,
   resolveFlexpayWebhookStatus,
   validateFlexpayWebhookSecret,
@@ -416,11 +417,30 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
 
 app.post("/api/payments/webhook/flexpay", async (req, res) => {
   try {
-    const payload = asRecord(req.body);
-    console.log("FlexPay webhook received", JSON.stringify(payload));
-
     if (!validateFlexpayWebhookSecret(req.headers as Record<string, unknown>)) {
       return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook Flexpay non autorisé");
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = parseFlexpayWebhookBody(
+        asRecord(req.body),
+        req.headers as Record<string, unknown>
+      );
+      payload = parsed.payload;
+      if (parsed.encrypted) {
+        console.log("FlexPay webhook decrypted", JSON.stringify(payload));
+      } else {
+        console.log("FlexPay webhook received (plain)", JSON.stringify(payload));
+      }
+    } catch (error) {
+      console.error("FlexPay webhook parse failed", error);
+      return sendError(
+        res,
+        400,
+        "INVALID_WEBHOOK_PAYLOAD",
+        error instanceof Error ? error.message : "Payload webhook invalide"
+      );
     }
 
     const references = extractFlexpayReferences(payload);
