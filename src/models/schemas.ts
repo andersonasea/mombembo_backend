@@ -238,3 +238,36 @@ export const updateCompanyAdminSchema = z
   .refine((data) => Object.keys(data).length > 0, {
     message: "Aucune donnée à mettre à jour",
   });
+
+export const prelaunchLeadSchema = z
+  .object({
+    source: z.enum(["GENERAL", "PARTNER", "PILOT_KINSHASA_KIKWIT"]),
+    name: z.string().trim().min(2, "Votre nom est requis").max(120),
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+?[0-9\s().-]{9,24}$/, "Numéro de téléphone invalide")
+      .transform((value) =>
+        value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "")
+      ),
+    email: z
+      .union([z.string().trim().email("Adresse e-mail invalide"), z.literal("")])
+      .optional()
+      .transform((value) => value || undefined),
+    companyName: z.string().trim().max(160).optional(),
+    preferredRoute: z.string().trim().max(160).optional(),
+    message: z.string().trim().max(1_000).optional(),
+    consent: z.literal(true, {
+      error: "Votre accord est requis pour rejoindre la liste",
+    }),
+    website: z.string().max(0).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.source === "PARTNER" && !data.companyName?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Le nom de la société est requis",
+        path: ["companyName"],
+      });
+    }
+  });

@@ -135,27 +135,35 @@ export async function getAllBookings(req:Request,res:Response){
 return sendSuccess(res, toNumberValue(bookings));
 }
 
-export async function getBookingbyId(req:AuthRequest,res:Response) {
-    const user = requireAuthRequest(req, res)
-  if (!user) {
-    return;
-  }
-  const client = getPrismaClient();
-  if (!client) {
-    return res.status(500).json({
-      error: {
-        code: "CONFIG_ERROR",
-        message: "DATABASE_URL is required to start the backend API.",
-      },
-    });
-  }
+export async function getBookingbyId(req: AuthRequest, res: Response) {
+  try {
+    const user = requireAuthRequest(req, res);
+    if (!user) {
+      return;
+    }
+    const client = getPrismaClient();
+    if (!client) {
+      return res.status(500).json({
+        error: {
+          code: "CONFIG_ERROR",
+          message: "DATABASE_URL is required to start the backend API.",
+        },
+      });
+    }
 
     const id = String(req.params.id);
-    
-    // sync payment with provider
-    await syncPaymentWithProvider(client, id);
+
+    try {
+      await syncPaymentWithProvider(client, id);
+    } catch (error) {
+      console.warn("Payment sync skipped while loading booking", {
+        bookingId: id,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+
     const booking = await loadBookingDetail(client, id);
-  
+
     if (!booking) return sendError(res, 404, "BOOKING_NOT_FOUND", "Réservation introuvable");
     if (!req.user) return sendError(res, 401, "UNAUTHORIZED", "Non autorisé");
     const bookingCompanyId = (
@@ -169,9 +177,15 @@ export async function getBookingbyId(req:AuthRequest,res:Response) {
     if (!isOwner && !isPlatformAdmin(req.user) && !isCompanyBookingAdmin) {
       return sendError(res, 403, "FORBIDDEN", "Accès non autorisé");
     }
-  
+
     return sendSuccess(res, toNumberValue(booking));
-    
+  } catch (error) {
+    console.error("getBookingbyId failed", {
+      bookingId: req.params.id,
+      error,
+    });
+    return sendError(res, 500, "INTERNAL_SERVER_ERROR", "Erreur serveur");
+  }
 }
 
 export async function createBooking(req:AuthRequest,res:Response){

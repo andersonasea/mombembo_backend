@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  
 }
 
 datasource db {
@@ -58,53 +57,59 @@ enum LoyaltyTxType {
   ADJUST
 }
 
+enum PrelaunchLeadSource {
+  GENERAL
+  PARTNER
+  PILOT_KINSHASA_KIKWIT
+}
+
 model User {
-  id            String            @id @default(cuid())
+  id            String               @id @default(cuid())
   name          String
-  email         String            @unique
+  email         String               @unique
   phone         String?
   password      String
   imageUrl      String?
-  role          Role              @default(CLIENT)
+  role          Role                 @default(CLIENT)
   companyId     String?
-  company       TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  company       TransportCompany?    @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
   bookings      Booking[]
-  loyaltyPoints Int               @default(0)
-  loyaltyTier   LoyaltyTier       @default(BRONZE)
+  loyaltyPoints Int                  @default(0)
+  loyaltyTier   LoyaltyTier          @default(BRONZE)
   loyaltyTx     LoyaltyTransaction[]
 
   @@map("users")
 }
 
 model TransportCompany {
-  id            String    @id @default(cuid())
-  name          String
-  logo          String?
-  phone         String
-  email         String    @unique
-  address       String?
-  description   String?
-  isActive      Boolean   @default(true)
-  subscribedAt  DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  buses         Bus[]
-  routes        Route[]
-  admins        User[]
+  id           String   @id @default(cuid())
+  name         String
+  logo         String?
+  phone        String
+  email        String   @unique
+  address      String?
+  description  String?
+  isActive     Boolean  @default(true)
+  subscribedAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  buses        Bus[]
+  routes       Route[]
+  admins       User[]
 
   @@map("transport_companies")
 }
 
 model Bus {
-  id            String           @id @default(cuid())
-  plateNumber   String           @unique
-  model         String?
-  totalSeats    Int
-  companyId     String
-  company       TransportCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt     DateTime         @default(now())
-  schedules     Schedule[]
+  id          String           @id @default(cuid())
+  plateNumber String           @unique
+  model       String?
+  totalSeats  Int
+  companyId   String
+  company     TransportCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt   DateTime         @default(now())
+  schedules   Schedule[]
 
   @@map("buses")
 }
@@ -125,16 +130,16 @@ model Route {
 }
 
 model Schedule {
-  id             String         @id @default(cuid())
+  id             String          @id @default(cuid())
   routeId        String
-  route          Route          @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  route          Route           @relation(fields: [routeId], references: [id], onDelete: Cascade)
   busId          String
-  bus            Bus            @relation(fields: [busId], references: [id], onDelete: Cascade)
+  bus            Bus             @relation(fields: [busId], references: [id], onDelete: Cascade)
   departureTime  DateTime
   arrivalTime    DateTime?
   availableSeats Int
-  status         ScheduleStatus @default(ACTIVE)
-  createdAt      DateTime       @default(now())
+  status         ScheduleStatus  @default(ACTIVE)
+  createdAt      DateTime        @default(now())
   bookings       Booking[]
   seatSelections SeatSelection[]
 
@@ -142,17 +147,17 @@ model Schedule {
 }
 
 model Booking {
-  id          String        @id @default(cuid())
-  userId      String
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  scheduleId  String
-  schedule    Schedule      @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  seatsBooked Int
-  totalPrice  Decimal       @db.Decimal(10, 2)
-  status      BookingStatus @default(PENDING)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  payment     Payment?
+  id             String          @id @default(cuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduleId     String
+  schedule       Schedule        @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  seatsBooked    Int
+  totalPrice     Decimal         @db.Decimal(10, 2)
+  status         BookingStatus   @default(PENDING)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  payment        Payment?
   seatSelections SeatSelection[]
 
   @@map("bookings")
@@ -178,16 +183,16 @@ model SeatSelection {
 }
 
 model Payment {
-  id              String        @id @default(cuid())
-  bookingId       String        @unique
-  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  amount          Decimal       @db.Decimal(10, 2)
-  method          PaymentMethod
-  status          PaymentStatus @default(PENDING)
-  transactionRef  String?
-  phoneNumber     String
-  paidAt          DateTime?
-  createdAt       DateTime      @default(now())
+  id             String        @id @default(cuid())
+  bookingId      String        @unique
+  booking        Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  amount         Decimal       @db.Decimal(10, 2)
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  transactionRef String?
+  phoneNumber    String
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
 
   @@map("payments")
 }
@@ -205,4 +210,22 @@ model LoyaltyTransaction {
 
   @@index([userId, createdAt])
   @@map("loyalty_transactions")
+}
+
+model PrelaunchLead {
+  id             String              @id @default(cuid())
+  source         PrelaunchLeadSource
+  name           String
+  phone          String
+  email          String?
+  companyName    String?
+  preferredRoute String?
+  message        String?
+  consent        Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([source, phone])
+  @@index([source, createdAt])
+  @@map("prelaunch_leads")
 }

@@ -32,6 +32,7 @@ import AdminAnalyticsRoutes from "./routes/adminAnalyticsRoutes.js"
 import AdminUsersRoutes from "./routes/adminUsersRoutes.js"
 import CompanyAdminsRoutes from "./routes/companyAdminsRoutes.js"
 import SearchRoutes from "./routes/searchRoutes.js"
+import PrelaunchRoutes from "./routes/prelaunchRoutes.js"
 import { registerSwagger } from "./swagger.js";
 import { toNumberValue } from "./lib/toNumberValue.js";
 import type { AuthUser } from "./lib/auth.js";
@@ -40,6 +41,7 @@ dotenv.config();
 dotenv.config({ path: "../.env" });
 
 const app = express();
+app.set("trust proxy", 1);
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required to start the backend API.");
 }
@@ -75,7 +77,7 @@ function isOriginAllowed(origin: string) {
 
 console.log("CORS allowed origins:", ALLOWED_ORIGINS.join(", ") || "(none)");
 console.log("CORS also allows: https://*.vercel.app");
-console.log("FlexPay callback URL:", FLEXPAY_CALLBACK_URL || "(not configured)");
+console.log("FreshPay callback URL:", FLEXPAY_CALLBACK_URL || "(not configured)");
 
 app.use(
   cors(
@@ -274,6 +276,7 @@ app.use("/api/buses", BusRoutes)
 app.use("/api/routes", BusDestination)
 app.use("/api/schedules", BusSchedule)
 app.use("/api/search", SearchRoutes)
+app.use("/api/prelaunch", PrelaunchRoutes)
 app.use("/api/bookings", BusBooking)
 app.use("/api/users", requireAuth, UserRoutes)
 app.use("/api/admin/analytics", AdminAnalyticsRoutes)
@@ -325,7 +328,7 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       res,
       503,
       "PAYMENT_PROVIDER_NOT_CONFIGURED",
-      "Flexpay n'est pas encore configuré sur le serveur"
+      "FreshPay n'est pas encore configuré sur le serveur"
     );
   }
 
@@ -377,7 +380,7 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       res,
       {
         ...toNumberValue(updatedPayment),
-        provider: "FLEXPAY",
+        provider: "FRESHPAY",
         providerReference: flexpayResponse.providerReference,
         bookingStatus: "PENDING",
       },
@@ -397,12 +400,12 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       const separatorIndex = payload.indexOf(":");
       const statusCode = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "unknown";
       const details = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
-      console.error("Flexpay rejected payment request", { statusCode, details });
+      console.error("FreshPay rejected payment request", { statusCode, details });
       return sendError(
         res,
         502,
         "FLEXPAY_ERROR",
-        `Flexpay a rejeté la requête (status ${statusCode})`,
+        `FreshPay a rejeté la requête (status ${statusCode})`,
         details
       );
     }
@@ -410,7 +413,7 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
       res,
       502,
       "FLEXPAY_ERROR",
-      error instanceof Error ? error.message : "Erreur lors de l'appel Flexpay"
+      error instanceof Error ? error.message : "Erreur lors de l'appel FreshPay"
     );
   }
 });
@@ -418,7 +421,7 @@ app.post("/api/payments", requireAuth, async (req: AuthRequest, res) => {
 app.post("/api/payments/webhook/flexpay", async (req, res) => {
   try {
     if (!validateFlexpayWebhookSecret(req.headers as Record<string, unknown>)) {
-      return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook Flexpay non autorisé");
+      return sendError(res, 401, "INVALID_WEBHOOK_SIGNATURE", "Webhook FreshPay non autorisé");
     }
 
     let payload: Record<string, unknown>;
@@ -429,12 +432,12 @@ app.post("/api/payments/webhook/flexpay", async (req, res) => {
       );
       payload = parsed.payload;
       if (parsed.encrypted) {
-        console.log("FlexPay webhook decrypted", JSON.stringify(payload));
+        console.log("FreshPay webhook decrypted", JSON.stringify(payload));
       } else {
-        console.log("FlexPay webhook received (plain)", JSON.stringify(payload));
+        console.log("FreshPay webhook received (plain)", JSON.stringify(payload));
       }
     } catch (error) {
-      console.error("FlexPay webhook parse failed", error);
+      console.error("FreshPay webhook parse failed", error);
       return sendError(
         res,
         400,
@@ -458,7 +461,7 @@ app.post("/api/payments/webhook/flexpay", async (req, res) => {
     });
 
     if (!payment) {
-      console.warn("FlexPay webhook: payment not found for references", references);
+      console.warn("FreshPay webhook: payment not found for references", references);
       return sendError(res, 404, "PAYMENT_NOT_FOUND", "Paiement introuvable");
     }
 
@@ -480,12 +483,12 @@ app.post("/api/payments/webhook/flexpay", async (req, res) => {
 
     return sendSuccess(res, { received: true, providerStatus });
   } catch (error) {
-    console.error("FlexPay webhook failed", error);
+    console.error("FreshPay webhook failed", error);
     return sendError(
       res,
       500,
       "WEBHOOK_PROCESSING_FAILED",
-      error instanceof Error ? error.message : "Erreur webhook FlexPay"
+      error instanceof Error ? error.message : "Erreur webhook FreshPay"
     );
   }
 });
