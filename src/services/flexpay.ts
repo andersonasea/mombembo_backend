@@ -260,7 +260,7 @@ function parseInitResponse(
     const ackStatus = String(raw.Status ?? "").toLowerCase();
     if (ackStatus === "success" || ackStatus === "error") {
       if (ackStatus === "error" || normalizeProviderCode(raw.resultCode) === "FAILED") {
-        const comment = String(raw.Comment ?? raw.resultCodeErrorDescription ?? "Paiement rejeté par FlexPay");
+        const comment = String(raw.Comment ?? raw.resultCodeErrorDescription ?? "Paiement rejeté par FreshPay");
         throw new Error(`FLEXPAY_INIT_FAILED:400:${JSON.stringify({ message: comment, raw })}`);
       }
       return { providerReference, status: "PENDING", raw };
@@ -334,6 +334,20 @@ export async function initiateFlexpayPayment(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), flexpayTimeoutMs);
 
+  console.log("========== FRESHPAY REQUEST ==========");
+  console.dir(
+    {
+      url: baseUrl,
+      v5,
+      payload: {
+        ...payload,
+        merchant_secrete: "***",
+      },
+    },
+    { depth: null }
+  );
+  console.log("======================================");
+
   let response: Response;
   try {
     response = await fetch(baseUrl, {
@@ -346,6 +360,9 @@ export async function initiateFlexpayPayment(
       signal: controller.signal,
     });
   } catch (error) {
+    console.log("========== FRESHPAY NETWORK ERROR ==========");
+    console.dir(error, { depth: null });
+    console.log("============================================");
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("FLEXPAY_TIMEOUT");
     }
@@ -358,13 +375,13 @@ export async function initiateFlexpayPayment(
   const raw = contentType.includes("application/json")
     ? ((await response.json().catch(() => ({}))) as Record<string, unknown>)
     : ({ message: await response.text().catch(() => "") } as Record<string, unknown>);
+  const responseHeaders = Object.fromEntries(response.headers.entries());
 
-  console.log("FlexPay init response", {
-    status: response.status,
-    v5,
-    reference: input.reference,
-    raw,
-  });
+  console.log("========== FRESHPAY RESPONSE ==========");
+  console.log("Status:", response.status);
+  console.dir(responseHeaders, { depth: null });
+  console.dir(raw, { depth: null });
+  console.log("=======================================");
 
   if (!response.ok) {
     const details = JSON.stringify(raw);
@@ -421,7 +438,7 @@ export async function checkFlexpayPaymentStatus(
       : ({ message: await response.text().catch(() => "") } as Record<string, unknown>);
 
     if (!response.ok) {
-      console.warn("FlexPay status check returned non-OK", {
+      console.warn("FreshPay status check returned non-OK", {
         reference,
         endpoint: usesV1Verify ? baseUrl : checkUrl,
         status: response.status,
@@ -431,10 +448,10 @@ export async function checkFlexpayPaymentStatus(
     }
 
     const status = parseProviderStatus(raw);
-    console.log("FlexPay status check", { reference, status, raw });
+    console.log("FreshPay status check", { reference, status, raw });
     return { status, raw };
   } catch (error) {
-    console.warn("FlexPay status check failed", {
+    console.warn("FreshPay status check failed", {
       reference,
       endpoint: usesV1Verify ? baseUrl : checkUrl,
       error: error instanceof Error ? error.message : error,
