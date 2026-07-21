@@ -37,6 +37,23 @@ export function normalizeFlexpayPhoneNumber(phoneNumber: string): string {
   return `243${digits}`;
 }
 
+/** FreshPay PayDRC v5 sample uses local format 09XXXXXXXX. */
+export function normalizeFlexpayLocalPhoneNumber(phoneNumber: string): string {
+  const digits = phoneNumber.replace(/\D/g, "");
+  if (digits.startsWith("243") && digits.length >= 12) return `0${digits.slice(3)}`;
+  if (digits.startsWith("0")) return digits;
+  return `0${digits}`;
+}
+
+function resolveMerchantAccountFields(input: InitiateFlexpayPaymentInput) {
+  return {
+    firstname: process.env.FLEXPAY_ACCOUNT_FIRSTNAME?.trim() || input.firstName || "Peter",
+    lastname: process.env.FLEXPAY_ACCOUNT_LASTNAME?.trim() || input.lastName || "Ndandula",
+    email:
+      process.env.FLEXPAY_ACCOUNT_EMAIL?.trim() || input.email || "aseaanderson7@gmail.com",
+  };
+}
+
 function normalizeStatus(value: unknown): FlexpayPaymentStatus {
   const normalized = String(value ?? "").toUpperCase().replace(/\s+/g, "_");
   if (
@@ -208,31 +225,25 @@ function buildInitPayload(
   merchantSecret: string,
   v5: boolean
 ) {
-  const customerNumber = normalizeFlexpayPhoneNumber(input.phoneNumber);
-  const shared = {
+  // FreshPay: firstname/lastname/email are merchant-account fields (sample uses `email`, local phone 09…).
+  const account = resolveMerchantAccountFields(input);
+  const customerNumber = v5
+    ? normalizeFlexpayLocalPhoneNumber(input.phoneNumber)
+    : normalizeFlexpayPhoneNumber(input.phoneNumber);
+
+  return {
     merchant_id: merchantId,
     merchant_secrete: merchantSecret,
     amount: String(input.amount),
     currency: input.currency,
     action: "debit",
     customer_number: customerNumber,
-    firstname: input.firstName,
-    lastname: input.lastName,
+    firstname: account.firstname,
+    lastname: account.lastname,
+    email: account.email,
     reference: input.reference,
     method: getMethodMap(v5)[input.method],
-    callback_url: input.callbackUrl,
-  };
-
-  if (v5) {
-    return {
-      ...shared,
-      "e-mail": input.email,
-    };
-  }
-
-  return {
-    ...shared,
-    email: input.email,
+    callback_url: input.callbackUrl || "",
   };
 }
 
