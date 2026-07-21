@@ -413,14 +413,18 @@ export async function checkFlexpayPaymentStatus(
   const merchantId = process.env.FLEXPAY_MERCHANT_ID;
   const merchantSecret = process.env.FLEXPAY_MERCHANT_SECRET;
   const v5 = isV5Api(baseUrl);
+  // PayDRC v5 + gateway v1 use POST action=verify on the base URL (not GET /:reference).
+  const usesVerifyPost =
+    Boolean(merchantId && merchantSecret) &&
+    (v5 || baseUrl.includes("/gateway"));
   const checkUrl = resolveCheckUrl(reference);
-  const usesV1Verify = !v5 && baseUrl.includes("/gateway") && Boolean(merchantId && merchantSecret);
+  const endpoint = usesVerifyPost ? baseUrl : checkUrl;
   const flexpayTimeoutMs = Number(process.env.FLEXPAY_REQUEST_TIMEOUT_MS ?? 30000);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), flexpayTimeoutMs);
 
   try {
-    const response = usesV1Verify
+    const response = usesVerifyPost
       ? await fetch(baseUrl, {
           method: "POST",
           headers: {
@@ -451,7 +455,8 @@ export async function checkFlexpayPaymentStatus(
     if (!response.ok) {
       console.warn("FreshPay status check returned non-OK", {
         reference,
-        endpoint: usesV1Verify ? baseUrl : checkUrl,
+        endpoint,
+        method: usesVerifyPost ? "POST verify" : "GET",
         status: response.status,
         raw,
       });
@@ -459,12 +464,18 @@ export async function checkFlexpayPaymentStatus(
     }
 
     const status = parseProviderStatus(raw);
-    console.log("FreshPay status check", { reference, status, raw });
+    console.log("FreshPay status check", {
+      reference,
+      endpoint,
+      method: usesVerifyPost ? "POST verify" : "GET",
+      status,
+      raw,
+    });
     return { status, raw };
   } catch (error) {
     console.warn("FreshPay status check failed", {
       reference,
-      endpoint: usesV1Verify ? baseUrl : checkUrl,
+      endpoint,
       error: error instanceof Error ? error.message : error,
     });
     return { status: "PENDING", raw: null };
